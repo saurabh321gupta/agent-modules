@@ -1,0 +1,37 @@
+[project]
+name = "agent-modules"
+version = "0.1.0"
+description = "A portal-independent job application agent, decomposed into small independently testable modules."
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.68.0",
+  "playwright>=1.50.0,<1.63",
+  "pydantic>=2.9.0",
+  "pypdf>=5.0.0",
+]
+
+[project.scripts]
+job-agent = "agent_modules.cli:main"
+job-agent-profile = "agent_modules.profile_builder:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_modules"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# One event loop for the whole session, so a single Chromium can be launched once and shared by
+# every browser-bound test. Per-test launches dominated the suite runtime.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+filterwarnings = ["error::DeprecationWarning"]

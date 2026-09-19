@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Application form</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    .hidden-file { display: none; }
+    .offscreen { position: absolute; left: -9999px; }
+    .row { margin-bottom: 12px; }
+    fieldset { border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <h1>My Information</h1>
+
+  <!-- Plain labelled text field -->
+  <div class="row">
+    <label for="city">City</label>
+    <input id="city" name="city" type="text" required />
+  </div>
+
+  <!-- Required field marked only by aria-required -->
+  <div class="row">
+    <label for="email">Email Address</label>
+    <input id="email" name="email" type="email" aria-required="true" />
+  </div>
+
+  <!-- Labelled through aria-labelledby, which the heuristic chain cannot see -->
+  <div class="row">
+    <span id="phone-label">Phone Number</span>
+    <input id="phone" name="phone" type="tel" aria-labelledby="phone-label" />
+  </div>
+
+  <!-- Labelled only by a sibling div: no for, no wrapping label, no placeholder -->
+  <div class="row">
+    <div>Postal Code</div>
+    <input id="postal" name="postal" type="text" />
+  </div>
+
+  <!-- Field carrying a private-use icon glyph in its accessible name -->
+  <div class="row">
+    <label for="glyph">&#xe001; Given Name(s)</label>
+    <input id="glyph" name="given" type="text" />
+  </div>
+
+  <!-- Select: options are codes, not words, so the value must be copied from the page -->
+  <div class="row">
+    <label for="country">Country</label>
+    <select id="country" name="country" required>
+      <option value="">Please Select</option>
+      <option value="IND">India</option>
+      <option value="USA">United States</option>
+      <option value="GBR">United Kingdom</option>
+    </select>
+  </div>
+
+  <!-- Radio group: the question lives in the legend, not on the options -->
+  <fieldset>
+    <legend>Are you legally authorised to work in India?</legend>
+    <label><input type="radio" name="auth" value="yes" /> Yes</label>
+    <label><input type="radio" name="auth" value="no" /> No</label>
+  </fieldset>
+
+  <!-- Consent checkbox, which the policy layer may accept automatically -->
+  <div class="row">
+    <label>
+      <input id="consent" name="consent" type="checkbox" />
+      I agree to the processing of my personal data as described in the privacy notice
+    </label>
+  </div>
+
+  <!-- The real resume control is hidden behind a styled button, exactly as eBay does it -->
+  <div class="row">
+    <input id="resume" name="resume" type="file" class="hidden-file" />
+    <button id="upload" type="button">Upload Resume</button>
+  </div>
+
+  <div class="row">
+    <label for="notes">Additional information</label>
+    <textarea id="notes" name="notes"></textarea>
+  </div>
+
+  <!-- Disabled until the form is valid -->
+  <button id="next" type="submit" disabled>Next</button>
+
+  <!-- Navigation that must never be sent to a model -->
+  <a href="https://example.com/help">Need help?</a>
+  <a href="https://example.com/apply" role="button">Apply Now</a>
+</body>
+</html>

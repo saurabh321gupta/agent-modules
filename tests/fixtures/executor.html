@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Executor</title></head>
+<body>
+  <input id="plain" type="text" aria-label="Plain" />
+
+  <!-- Clearing itself on input means the write cannot survive verification -->
+  <input id="reverting" type="text" aria-label="Reverting"
+         oninput="this.value=''" />
+
+  <!-- Rewrites its value once focus leaves, the way eBay's email field behaved -->
+  <input id="blur-revert" type="text" aria-label="Blur revert"
+         onblur="this.value=this.value.toUpperCase()" />
+
+  <input id="readonly" type="text" aria-label="Readonly" readonly value="fixed" />
+
+  <select id="country" aria-label="Country">
+    <option value="">Please Select</option>
+    <option value="IND">India</option>
+    <option value="USA">United States</option>
+  </select>
+
+  <input id="agree" type="checkbox" aria-label="I consent" />
+
+  <button id="go" type="button" onclick="document.body.dataset.clicked='yes'">Go</button>
+
+  <input id="resume" type="file" aria-label="Resume" style="display:none" />
+
+  <div style="height: 3000px"></div>
+
+  <button id="far-away" type="button">Far away</button>
+</body>
+</html>

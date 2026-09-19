@@ -1,0 +1,511 @@
+"""Tests for `agent_modules.orchestrator`.
+
+Drives `_ApplicationRun.loop` with a fake page, a scripted reader and a scripted planner, so the
+loop's policies are tested as decisions rather than as timing.
+
+The browser lifecycle and the real Playwright integration are covered by `test_executor` and
+`test_reader`; this file is about the control flow between them.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+
+import pytest
+from helpers import element, plan, profile, snapshot
+from page_fakes import FakePage, FakeReader, ScriptedPlanner
+
+from agent_modules import orchestrator
+from agent_modules.config import RunConfig
+from agent_modules.journey import JourneyLogger
+from agent_modules.orchestrator import _ApplicationRun, _without_disabled_target, run_application
+from agent_modules.types import ApplicationPlan
+
+APPLICANT = profile()
+EL = [element("e1", label="City"), element("e2", role="button", label="Next", input_type="submit")]
+
+
+def payload(kind: str = "fill", target: str = "e1", **extra) -> dict:
+    base = {
+        "type": kind,
+        "target": target,
+        "value": None,
+        "value_ref": None,
+        "option_value": None,
+        "checked": None,
+        "asset_id": None,
+    }
+    base.update(extra)
+    return base
+
+
+def plan_of(snapshot_id: str, actions: list[dict], *, status: str = "continue", reason: str = "r"):
+    return ApplicationPlan.model_validate(
+        {
+            "snapshot_id": snapshot_id,
+            "status": status,
+            "actions": actions,
+            "reason": reason,
+            "completion_evidence": None,
+        }
+    )
+
+
+def make_run(plans, *, snapshots=None, config=None, raises=None, tmp_path=None):
+    logger = JourneyLogger(str(tmp_path / "j.jsonl")) if tmp_path else JourneyLogger(None)
+    config = config or RunConfig(planner="llm", max_steps=8)
+    run = _ApplicationRun("https://example.com/apply", APPLICANT, {}, config, logger)
+    run.reader = FakeReader(snapshots or [snapshot(EL)])
+    run.budgeted = []
+    run.deadline = time.monotonic() + config.max_run_seconds
+    planner = ScriptedPlanner(plans, raises=raises)
+    return run, planner, FakePage(), logger
+
+
+# ------------------------------------------------------------------------------- preconditions
+
+
+async def test_a_bad_url_is_refused_before_anything_else(tmp_path):
+    run, _, _, logger = make_run([plan("s-1-abc12345")], tmp_path=tmp_path)
+    run.url = "ftp://example.com"
+    result = await run.execute()
+    assert result.status == "failed"
+    assert "http://" in result.message
+    logger.close()
+
+
+async def test_the_staged_planner_requires_a_jev_key(tmp_path):
+    run, _, _, logger = make_run(
+        [plan("s-1-abc12345")], config=RunConfig(planner="staged", api_key="k"), tmp_path=tmp_path
+    )
+    result = await run.execute()
+    assert result.status == "failed"
+    assert "Jev API key" in result.message
+    logger.close()
+
+
+async def test_the_llm_planner_requires_an_llm_key(tmp_path):
+    run, _, _, logger = make_run(
+        [plan("s-1-abc12345")], config=RunConfig(planner="llm", api_key=None), tmp_path=tmp_path
+    )
+    run.config.api_key = None
+    result = await run.execute()
+    assert result.status == "failed"
+    assert "LLM API key" in result.message
+    logger.close()
+
+
+# ------------------------------------------------------------------------------------- the loop
+
+
+async def test_a_completion_verdict_ends_the_run_successfully(tmp_path):
+    """The verifier owns success: a page that says it was received, and nothing else."""
+    snap = snapshot(EL, visible_text=["Thank you for applying"])
+    run, _, _, logger = make_run([plan("s-1-abc12345")], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), ScriptedPlanner([plan("s-1-abc12345")]))
+    assert result.status == "success"
+    assert result.evidence is not None
+    logger.close()
+
+
+async def test_a_blocker_ends_the_run_as_blocked(tmp_path):
+    """Blockers are computed by the reader from the page text, so they arrive on the snapshot."""
+    snap = snapshot(EL, blockers=["CAPTCHA or human verification is present"])
+    run, _, _, logger = make_run([plan("s-1-abc12345")], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), ScriptedPlanner([plan("s-1-abc12345")]))
+    assert result.status == "blocked"
+    assert "CAPTCHA" in result.message
+    logger.close()
+
+
+async def test_a_page_that_does_not_move_is_abandoned(tmp_path):
+    """Three identical snapshots means it is not going to advance, and each retry costs a call."""
+    snap = snapshot(EL)
+    run, planner, _, logger = make_run(
+        [plan("s-1-abc12345")], snapshots=[snap], tmp_path=tmp_path
+    )
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "blocked"
+    assert "No page progress" in result.message
+    assert planner.calls <= orchestrator.NO_PROGRESS_LIMIT
+    logger.close()
+
+
+async def test_needs_input_is_passed_through_with_its_reason(tmp_path):
+    snap = snapshot(EL)
+    pending = plan("s-1-abc12345", [], status="needs_input", reason="Current salary is unknown")
+    run, _, _, logger = make_run([pending], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), ScriptedPlanner([pending]))
+    assert result.status == "needs_input"
+    assert result.message == "Current salary is unknown"
+    logger.close()
+
+
+async def test_a_complete_verdict_without_visible_evidence_does_not_end_the_run(tmp_path):
+    """Only the verifier may declare success, so a 'complete' plan is re-observed."""
+    snap = snapshot(EL)
+    claimed = plan("s-1-abc12345", [], status="complete", reason="done")
+    run, planner, _, logger = make_run([claimed], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "blocked", "the run kept going and then hit no-progress"
+    assert planner.calls > 1
+    logger.close()
+
+
+async def test_the_step_limit_is_reported(tmp_path):
+    """A different snapshot every step, and a real action each time, so nothing else stops the run."""
+    steps = [
+        snapshot([element("e1", label="City", value=f"v{i}")], snapshot_id=f"s-{i}-unique{i}")
+        for i in range(1, 12)
+    ]
+    factory = lambda snap: plan_of(snap.snapshot_id, [payload("fill", "e1", value="x")])  # noqa: E731
+    run, _, _, logger = make_run(
+        [factory(steps[0])],
+        snapshots=steps,
+        config=RunConfig(planner="llm", max_steps=3),
+        tmp_path=tmp_path,
+    )
+    result = await run.loop(FakePage(), ScriptedPlanner(factory))
+    assert result.status == "step_limit"
+    assert result.steps == 3
+    logger.close()
+
+
+# -------------------------------------------------------------------------------------- budget
+
+
+async def test_an_exhausted_budget_discards_the_run_without_submitting(tmp_path):
+    run, plan_r, _, logger = make_run(
+        [plan("s-1-abc12345")],
+        snapshots=[snapshot(EL)],
+        config=RunConfig(planner="llm", max_run_seconds=0.0),
+        tmp_path=tmp_path,
+    )
+    result = await run.loop(FakePage(), plan_r)
+    assert result.status == "timeout"
+    assert "without submitting" in result.message
+    logger.close()
+
+
+async def test_the_budget_is_reported_in_the_readable_log(tmp_path):
+    run, plan_r, _, logger = make_run(
+        [plan("s-1-abc12345")],
+        snapshots=[snapshot(EL)],
+        config=RunConfig(planner="llm", max_run_seconds=0.0),
+        tmp_path=tmp_path,
+    )
+    await run.loop(FakePage(), plan_r)
+    logger.close()
+    assert "EXHAUSTED - DISCARDING WITHOUT SUBMITTING" in (tmp_path / "j.log").read_text()
+
+
+def test_the_per_call_timeout_is_clamped_to_the_remaining_budget(tmp_path):
+    """A 60s call cannot outlive a 10s budget, or the run overruns by design."""
+    run, _, _, logger = make_run(
+        [], config=RunConfig(planner="llm", request_timeout_s=60.0), tmp_path=tmp_path
+    )
+
+    class FakeClient:
+        request_timeout_s = 60.0
+
+    client = FakeClient()
+    run.budgeted = [client]
+    run.clamp_budget(120.0)
+    assert client.request_timeout_s == 60.0, "never extended beyond the configured bound"
+    run.clamp_budget(10.0)
+    assert client.request_timeout_s == 10.0
+    logger.close()
+
+
+def test_the_per_call_timeout_has_a_floor(tmp_path):
+    """A fraction of a second left should not become a fraction-of-a-second timeout."""
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+
+    class FakeClient:
+        request_timeout_s = 60.0
+
+    client = FakeClient()
+    run.budgeted = [client]
+    run.clamp_budget(0.4)
+    assert client.request_timeout_s == 5.0
+    logger.close()
+
+
+# ----------------------------------------------------------------------------------- rejection
+
+
+async def test_one_disabled_control_does_not_discard_the_rest_of_the_batch(tmp_path):
+    """The reduced batch is re-validated and executed, so two good fills are not thrown away."""
+    snap = snapshot(
+        [
+            element("e1", label="City"),
+            element("e2", label="Locked", enabled=False),
+            element("e3", label="Postal Code"),
+        ]
+    )
+    batch = plan_of(
+        snap.snapshot_id,
+        [
+            payload("fill", "e1", value="Bangalore"),
+            payload("fill", "e2", value="x"),
+            payload("fill", "e3", value="560001"),
+        ],
+    )
+    run, planner, page, logger = make_run(
+        [batch], snapshots=[snap], config=RunConfig(planner="llm", max_steps=1), tmp_path=tmp_path
+    )
+    await run.loop(page, planner)
+    assert page.filled.get("e1") == "Bangalore"
+    assert page.filled.get("e3") == "560001"
+    assert "e2" not in page.filled
+    assert "PARTIALLY ACCEPTED" in (tmp_path / "j.log").read_text()
+    logger.close()
+
+
+def test_a_reduction_only_drops_the_named_target():
+    snap = snapshot([element("e1"), element("e2"), element("e3")])
+    original = ApplicationPlan.model_validate(
+        {
+            "snapshot_id": snap.snapshot_id,
+            "status": "continue",
+            "actions": [payload("fill", "e1", value="a"), payload("fill", "e2", value="b")],
+            "reason": "r",
+            "completion_evidence": None,
+        }
+    )
+    reduced = _without_disabled_target(original, "Target e2 is disabled")
+    assert reduced is not None
+    assert [a.target for a in reduced.actions] == ["e1"]
+
+
+def test_a_reduction_is_declined_when_it_would_drop_everything():
+    snap = snapshot([element("e1")])
+    original = ApplicationPlan.model_validate(
+        {
+            "snapshot_id": snap.snapshot_id,
+            "status": "continue",
+            "actions": [payload("fill", "e1", value="a")],
+            "reason": "r",
+            "completion_evidence": None,
+        }
+    )
+    assert _without_disabled_target(original, "Target e1 is disabled") is None
+
+
+def test_a_reduction_is_declined_for_an_unrelated_rejection():
+    snap = snapshot([element("e1")])
+    original = ApplicationPlan.model_validate(
+        {
+            "snapshot_id": snap.snapshot_id,
+            "status": "continue",
+            "actions": [payload("fill", "e1", value="a")],
+            "reason": "r",
+            "completion_evidence": None,
+        }
+    )
+    assert _without_disabled_target(original, "Plan was created for an expired snapshot") is None
+
+
+async def test_a_recoverable_rejection_is_retried_then_becomes_blocked(tmp_path):
+    """An option the page does not offer just needs another choice, so it is worth re-planning.
+
+    Distinct snapshots so no-progress detection does not fire first and mask the retries.
+    """
+    steps = [
+        snapshot(
+            [
+                element(
+                    "e1",
+                    role="combobox",
+                    label="Country",
+                    input_type="select-one",
+                    options=[("IND", "India")],
+                    value=f"v{i}",
+                )
+            ],
+            snapshot_id=f"s-{i}-u{i}",
+        )
+        for i in range(1, 8)
+    ]
+    factory = lambda snap: plan_of(  # noqa: E731
+        snap.snapshot_id, [payload("select", "e1", option_value="NOPE")]
+    )
+    run, planner, _, logger = make_run(
+        factory,
+        snapshots=steps,
+        config=RunConfig(planner="llm", max_steps=10),
+        tmp_path=tmp_path,
+    )
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "blocked"
+    assert "unavailable" in result.message
+    assert planner.calls == orchestrator.MAX_TRANSIENT_REJECTIONS + 1
+    assert "REJECTED - RETRYING" in (tmp_path / "j.log").read_text()
+    logger.close()
+
+
+async def test_an_unrecoverable_rejection_stops_immediately(tmp_path):
+    snap = snapshot(EL)
+    stale = plan("s-OLD", [])
+    run, planner, _, logger = make_run([stale], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "blocked"
+    assert "expired snapshot" in result.message
+    assert planner.calls == 1
+    logger.close()
+
+
+async def test_continue_with_no_actions_is_retried_before_giving_up(tmp_path):
+    """A control is often briefly disabled while the site saves; that is not a dead end.
+
+    Distinct snapshots here so no-progress detection does not fire first and mask the retries.
+    """
+    steps = [
+        snapshot([element("e1", label="City", value=f"v{i}")], snapshot_id=f"s-{i}-u{i}")
+        for i in range(1, 8)
+    ]
+    factory = lambda snap: plan_of(snap.snapshot_id, [])  # noqa: E731
+    run, planner, _, logger = make_run(
+        factory,
+        snapshots=steps,
+        config=RunConfig(planner="llm", max_steps=8),
+        tmp_path=tmp_path,
+    )
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "blocked"
+    assert "no actions" in result.message
+    assert planner.calls == orchestrator.MAX_TRANSIENT_REJECTIONS + 1
+    logger.close()
+
+
+# ---------------------------------------------------------------------------------- stale plans
+
+
+async def test_a_contradictory_plan_is_ignored_then_abandoned(tmp_path):
+    """Every requested action already matches the page: a contradiction, not a request."""
+    snap = snapshot([element("e1", label="City", value="Bangalore")])
+    satisfied = plan_of(
+        snap.snapshot_id,
+        [payload("fill", "e1", value="Bangalore")],
+        status="needs_input",
+        reason="needs the city",
+    )
+    run, planner, _, logger = make_run(
+        [satisfied], snapshots=[snap], config=RunConfig(planner="llm", max_steps=10), tmp_path=tmp_path
+    )
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "blocked"
+    assert "already satisfied" in result.message
+    assert "IGNORED AS STALE/CONTRADICTORY" in (tmp_path / "j.log").read_text()
+    logger.close()
+
+
+async def test_a_genuine_needs_input_is_not_mistaken_for_a_stale_plan(tmp_path):
+    """The requested action does not yet match the page, so this is a real request for input."""
+    snap = snapshot([element("e1", label="City")])
+    genuine = plan_of(
+        snap.snapshot_id,
+        [payload("fill", "e1", value="Bangalore")],
+        status="needs_input",
+        reason="salary unknown",
+    )
+    run, planner, _, logger = make_run([genuine], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "needs_input"
+    assert result.message == "salary unknown"
+    logger.close()
+
+
+# ----------------------------------------------------------------------------- empty snapshots
+
+
+async def test_a_page_that_has_not_painted_is_re_observed(tmp_path):
+    """Observing an unrendered shell and concluding there is no form ends the run too early."""
+    blank = snapshot([], snapshot_id="s-1-blank000")
+    painted = snapshot([element("e1", label="City", value="Bangalore")])
+    run, planner, _, logger = make_run(
+        [], snapshots=[blank, blank, painted], config=RunConfig(planner="llm", max_steps=1), tmp_path=tmp_path
+    )
+    await run.loop(FakePage(), planner)
+    logger.close()
+    assert "NOTHING YET - RE-OBSERVING" in (tmp_path / "j.log").read_text()
+
+
+async def test_a_page_that_never_paints_is_blocked(tmp_path):
+    blank = snapshot([], snapshot_id="s-1-blank000")
+    run, planner, _, logger = make_run([], snapshots=[blank], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), planner)
+    assert result.status == "blocked"
+    assert "never rendered" in result.message
+    logger.close()
+
+
+# ----------------------------------------------------------------------------------- teardown
+
+
+async def test_a_navigation_failure_is_reported_clearly(tmp_path):
+    run, _, page, logger = make_run([], snapshots=[snapshot(EL)], tmp_path=tmp_path)
+    page.goto_error = RuntimeError("net::ERR_NAME_NOT_RESOLVED")
+    result = await run.loop(page, ScriptedPlanner([plan("s-1-abc12345")]))
+    assert result.status == "failed"
+    assert "Could not open application URL" in result.message
+    logger.close()
+
+
+async def test_a_run_that_cannot_start_still_points_at_its_trace(tmp_path):
+    """Every result carries the paths of its own artefacts, including a run that fails immediately."""
+    result = await run_application(
+        "https://example.com/apply",
+        APPLICANT,
+        {},
+        RunConfig(
+            planner="llm", api_key="k", max_steps=1, journey_log_path=str(tmp_path / "j.jsonl")
+        ),
+    )
+    assert result.status in {"failed", "blocked", "needs_input", "timeout", "step_limit", "success"}
+    assert result.journey_jsonl == str(tmp_path / "j.jsonl")
+    assert result.journey_log == str(tmp_path / "j.log")
+    assert (tmp_path / "j.jsonl").exists()
+
+
+async def test_the_run_finished_event_is_always_written(tmp_path):
+    run, planner, _, logger = make_run(
+        [plan("s-1-abc12345")],
+        snapshots=[snapshot(EL, visible_text=["Thank you for applying"])],
+        tmp_path=tmp_path,
+    )
+    result = await run.loop(FakePage(), planner)
+    logger.log("run_finished", result=result)
+    logger.close()
+    events = [
+        json.loads(line)["event"]
+        for line in (tmp_path / "j.jsonl").read_text().splitlines()
+        if line
+    ]
+    assert events[-1] == "run_finished"
+
+
+# ----------------------------------------------------------------------------- consent defaults
+
+
+async def test_consent_checkboxes_are_ticked_before_the_planner_is_asked(tmp_path):
+    """A consent box is not a question for the candidate, so it never reaches the planner."""
+    consent = snapshot(
+        [element("e1", role="checkbox", label="I accept the privacy notice", checked=False)]
+    )
+    moved = snapshot(EL, snapshot_id="s-2-moved000", visible_text=["Thank you for applying"])
+    run, planner, page, logger = make_run(
+        [], snapshots=[consent, moved], config=RunConfig(planner="llm", max_steps=4), tmp_path=tmp_path
+    )
+    result = await run.loop(page, planner)
+    assert page.checked.get("e1") is True
+    assert planner.calls in (0, 1)
+    assert result.status == "success"
+    logger.close()
+
+
+if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path
+    import pytest
+
+    raise SystemExit(pytest.main([__file__, "-v"]))
