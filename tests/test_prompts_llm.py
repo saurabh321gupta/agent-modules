@@ -11,6 +11,7 @@ from agent_modules.prompts_llm import (
     FILLED_OPTION_WINDOW,
     FORM_SYSTEM_PROMPT,
     MAIN_SYSTEM_PROMPT,
+    BATCH_RULE,
     MAX_OPTIONS_SENT,
     REJECTION_RULE,
     UPLOAD_RULE,
@@ -33,6 +34,15 @@ def test_both_prompts_state_the_upload_rule():
     assert UPLOAD_RULE in FORM_SYSTEM_PROMPT
     assert "upload action" in UPLOAD_RULE
     assert "asset_id" in UPLOAD_RULE
+
+
+def test_both_prompts_explain_that_only_one_page_changing_action_can_land():
+    """A batch ends at a click, an upload or a scroll, so pairing an upload with a click means only
+    the upload happens and the page never advances - which is exactly what closed a live run."""
+    assert BATCH_RULE in MAIN_SYSTEM_PROMPT
+    assert BATCH_RULE in FORM_SYSTEM_PROMPT
+    assert "at most one of them can take effect" in BATCH_RULE
+    assert "Never pair an upload with a click" in BATCH_RULE
 
 
 def test_both_prompts_warn_against_repeating_a_rejected_value():

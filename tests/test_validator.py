@@ -263,6 +263,43 @@ def test_upload_to_a_file_input_is_allowed(sample_profile):
     )
 
 
+def test_uploading_to_an_input_that_already_holds_a_file_is_rejected(sample_profile):
+    """The trap that closed a run on a page it had never tried to leave.
+
+    Re-uploading the same file changes nothing, and a batch ends at an upload, so everything after it
+    is discarded - which left the same no-op plan repeating until no-progress gave up. The rejection
+    also reaches the planner in recent_history, so it can stop asking.
+    """
+    with pytest.raises(PlanValidationError, match="already holds a file"):
+        validate_plan(
+            plan("s-1-abc12345", [action("upload", "e4", asset_id="resume_primary")]),
+            form_snapshot(
+                elements=[
+                    element("e4", role="textbox", label="", input_type="file",
+                            visible=False, file_attached=True)
+                ]
+            ),
+            sample_profile,
+            ASSETS,
+            True,
+        )
+
+
+def test_an_empty_file_input_is_still_uploadable_in_the_same_batch_shape(sample_profile):
+    validate_plan(
+        plan("s-1-abc12345", [action("upload", "e4", asset_id="resume_primary")]),
+        form_snapshot(
+            elements=[
+                element("e4", role="textbox", label="", input_type="file",
+                        visible=False, file_attached=False)
+            ]
+        ),
+        sample_profile,
+        ASSETS,
+        True,
+    )
+
+
 def test_upload_to_a_non_file_input_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="is not a file input"):
         validate_plan(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from fakes import FakeModelClient
+from fakes import FakeModelClient, thinking_of
 from helpers import element, profile, snapshot
 
 from agent_modules.config import AutomationDefaults
@@ -313,6 +313,28 @@ async def test_a_plan_is_not_logged_as_received_by_the_planner():
     client, planner = make(plan_json(), journey=RecordingLogger())
     await planner.next_step(APPLICANT, snapshot([element("e1", label="City")]), [])
     assert "plan_received" not in logger_calls
+
+
+# ---------------------------------------------------------------------------------------- thinking
+
+
+async def test_the_answering_call_leaves_thinking_to_the_provider_by_default():
+    """Unset is not the same as off.
+
+    Answering a form involves real judgement - matching a fact to a question, choosing between
+    similar options - so it is left alone until someone has measured that turning it off holds up.
+    """
+    client, planner = make(plan_json())
+    await planner.next_step(APPLICANT, snapshot([element("e1", label="City")]), [])
+    assert thinking_of(client.calls[0]) is None
+
+
+async def test_the_answering_call_can_switch_thinking_off():
+    """For measuring the trade: the same run with reasoning off, compared on the same page."""
+    client = FakeModelClient(plan_json())
+    planner = LLMPlanner(client, "model", ASSETS, AutomationDefaults(), thinking=False)
+    await planner.next_step(APPLICANT, snapshot([element("e1", label="City")]), [])
+    assert thinking_of(client.calls[0]) is False
 
 
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path

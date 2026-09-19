@@ -52,6 +52,7 @@ class ModelClient(Protocol):
         response_format: dict[str, Any] | None = None,
         model: str | None = None,
         timeout_s: float | None = None,
+        thinking: bool | None = None,
     ) -> Completion: ...
 
 
@@ -132,6 +133,7 @@ class DeepSeekClient:
         messages: list[dict[str, Any]],
         response_format: dict[str, Any] | None,
         model: str | None,
+        thinking: bool | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": model or self.model,
@@ -141,6 +143,11 @@ class DeepSeekClient:
             body["response_format"] = response_format
         if self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
+        if thinking is not None:
+            # `thinking` is provider-specific, so it has to travel in extra_body. Sent as a top-level
+            # kwarg the SDK raises "create() got an unexpected keyword argument 'thinking'", and the
+            # fakes cannot catch that because they accept anything - only a real call does.
+            body["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
         return body
 
     async def complete(
@@ -150,8 +157,11 @@ class DeepSeekClient:
         response_format: dict[str, Any] | None = None,
         model: str | None = None,
         timeout_s: float | None = None,
+        thinking: bool | None = None,
     ) -> Completion:
-        return await self._race(self._body(messages, response_format, model), timeout_s)
+        return await self._race(
+            self._body(messages, response_format, model, thinking), timeout_s
+        )
 
     async def complete_json(
         self,
@@ -161,6 +171,7 @@ class DeepSeekClient:
         schema_name: str = "response",
         model: str | None = None,
         timeout_s: float | None = None,
+        thinking: bool | None = None,
     ) -> Completion:
         """Ask for a strict JSON object, degrading to JSON mode if the provider refuses the schema.
 
@@ -178,7 +189,7 @@ class DeepSeekClient:
                 }
             else:
                 response_format = {"type": "json_object"}
-            body = self._body(build_messages(mode), response_format, model)
+            body = self._body(build_messages(mode), response_format, model, thinking)
             try:
                 return await self._race(body, timeout_s)
             except Exception as exc:

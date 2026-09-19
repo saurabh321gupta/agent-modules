@@ -81,6 +81,62 @@ def test_hidden_file_input_reaches_the_real_ebay_shape():
     assert len(described) == len(EBAY_LIKE_ELEMENTS)
 
 
+def test_an_attached_file_input_is_not_offered():
+    """Regression, found on a live run.
+
+    An application wizard keeps its resume widget mounted in the page shell, so the same hidden input
+    appears on every step, already attached after the first upload. Offering it invites the model to
+    upload the resume again on page four - and because re-uploading the same file changes nothing,
+    the identical plan repeats until the run is declared stuck on a page it never tried to leave.
+    """
+    described = extractor.describe(
+        snapshot(
+            [
+                element("e6", role="textbox", label="", input_type="file",
+                        visible=False, file_attached=True),
+                element("e7", label="City"),
+            ]
+        )
+    )
+    assert [item["id"] for item in described] == ["e7"]
+
+
+def test_an_empty_hidden_file_input_is_still_offered():
+    """The page-one case the visibility exemption exists for."""
+    described = extractor.describe(
+        snapshot(
+            [element("e9", role="textbox", label="", input_type="file",
+                     visible=False, file_attached=False)]
+        )
+    )
+    assert [item["id"] for item in described] == ["e9"]
+
+
+def test_attachment_does_not_change_the_form_signature():
+    """The shape is the same whether or not a file is attached, so the cache must survive it.
+
+    If it did not, uploading the resume would miss the cache and re-normalise the whole page.
+    """
+    empty = snapshot([element("e9", role="textbox", label="", input_type="file",
+                              visible=False, file_attached=False)])
+    attached = snapshot([element("e9", role="textbox", label="", input_type="file",
+                                 visible=False, file_attached=True)])
+    assert extractor.form_signature(empty) == extractor.form_signature(attached)
+
+
+def test_capturable_and_actionable_differ_only_for_an_attached_file():
+    attached = element("e1", role="textbox", label="", input_type="file",
+                       visible=False, file_attached=True)
+    empty = element("e2", role="textbox", label="", input_type="file",
+                    visible=False, file_attached=False)
+    plain = element("e3", label="City")
+    assert extractor.is_capturable(attached) is True
+    assert extractor.is_actionable(attached) is False
+    for other in (empty, plain):
+        assert extractor.is_capturable(other) is True
+        assert extractor.is_actionable(other) is True
+
+
 def test_all_options_are_carried_whole():
     """A dropdown's option values are often codes only the page knows, so none may be trimmed."""
     options = [(f"CODE_{i}", f"Option {i}") for i in range(300)]

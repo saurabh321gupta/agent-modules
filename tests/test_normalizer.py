@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from fakes import FakeModelClient
+from fakes import FakeModelClient, thinking_of
 from helpers import EBAY_LIKE_ELEMENTS, element, snapshot
 
 from agent_modules import extractor
@@ -275,13 +275,41 @@ async def test_a_cached_form_is_logged_as_cached(tmp_path):
     assert "reused from cache" in human
 
 
-def test_the_extractor_is_the_only_place_that_decides_visibility():
-    """A guard on the fix: the normalizer must not re-implement the filter."""
+def test_the_extractor_is_the_only_place_that_decides_what_is_shown():
+    """A guard on the fix: the normalizer must not re-implement the filter.
+
+    Which controls reach a model is one decision, made once, so that the view the normaliser gets and
+    the safety net that catches omitted controls can never disagree about it.
+    """
     import inspect
 
     source = inspect.getsource(Normalizer)
-    assert "is_capturable" in source
+    assert "is_actionable" in source
     assert "element.visible" not in source
+    assert "file_attached" not in source, "the attached-file rule belongs in the extractor"
+
+
+# ---------------------------------------------------------------------------------------- thinking
+
+
+async def test_the_normaliser_switches_reasoning_off_by_default():
+    """Describing what a field asks is extraction, not deduction.
+
+    Measured against a real 30 KB form payload from the recorded traces, the same answer took 7.4s
+    with the provider reasoning and 2.5s without, and normalisation is roughly a quarter of a run.
+    """
+    snap = snapshot([element("e1", label="City")])
+    client, normalizer = make(snap, reply([]))
+    await normalizer.normalise(snap)
+    assert thinking_of(client.calls[0]) is False
+
+
+async def test_the_normaliser_can_be_asked_to_reason():
+    snap = snapshot([element("e1", label="City")])
+    client = FakeModelClient(reply([]))
+    normalizer = Normalizer(client, "model", thinking=True)
+    await normalizer.normalise(snap)
+    assert thinking_of(client.calls[0]) is True
 
 
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path

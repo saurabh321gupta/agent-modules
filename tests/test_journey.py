@@ -325,6 +325,17 @@ def test_renderer_can_be_used_without_a_logger():
     assert "expired" in output
 
 
+def test_run_started_reports_the_thinking_settings(tmp_path):
+    """Whether reasoning was on changes both the latency and the quality, so the trace must say."""
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("run_started", url="u", normaliser_thinking=False, planner_thinking=None)
+    logger.log("run_started", url="u", normaliser_thinking=True, planner_thinking=False)
+    logger.close()
+    human = (tmp_path / "j.log").read_text(encoding="utf-8")
+    assert "Thinking          : normaliser off, planner provider default" in human
+    assert "Thinking          : normaliser on, planner off" in human
+
+
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path
     import pytest
 

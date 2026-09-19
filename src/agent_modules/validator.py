@@ -141,6 +141,14 @@ def validate_plan(
         elif action.type == "upload":
             if element.input_type != "file":
                 raise PlanValidationError(f"Target {action.target} is not a file input")
+            if element.file_attached:
+                # Re-uploading the same file changes nothing on the page, and because a batch ends at
+                # an upload, everything after it is silently discarded - which is how a run repeated
+                # one no-op upload per step until it was declared stuck on a page it had never tried
+                # to leave.
+                raise PlanValidationError(
+                    f"Target {action.target} already holds a file; upload it only when it is empty"
+                )
             if not action.asset_id or action.asset_id not in assets:
                 raise PlanValidationError(f"Unregistered upload asset: {action.asset_id}")
             if action.asset_id not in candidate_asset_ids(profile):

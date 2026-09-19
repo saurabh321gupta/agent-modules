@@ -199,6 +199,35 @@ def test_help_text_documents_the_staged_default():
     assert "--max-seconds" in help_text
 
 
+# ----------------------------------------------------------------------------------------- thinking
+
+
+def test_normaliser_thinking_is_off_by_default():
+    """It is most of a normalise call's latency and buys nothing for an extraction task."""
+    assert cli.config_from_args(parse(*BASE)).normaliser_thinking is False
+
+
+def test_normaliser_thinking_can_be_turned_on():
+    args = parse(*BASE, "--normaliser-thinking")
+    assert cli.config_from_args(args).normaliser_thinking is True
+
+
+def test_planner_thinking_is_unset_by_default():
+    """Unset leaves the provider's own choice, which is deliberately not the same as off."""
+    assert cli.config_from_args(parse(*BASE)).planner_thinking is None
+
+
+def test_planner_thinking_can_be_set_either_way():
+    assert cli.config_from_args(parse(*BASE, "--planner-thinking")).planner_thinking is True
+    assert cli.config_from_args(parse(*BASE, "--no-planner-thinking")).planner_thinking is False
+
+
+def test_the_thinking_flags_are_documented():
+    help_text = cli.build_parser().format_help()
+    assert "--normaliser-thinking" in help_text
+    assert "--planner-thinking" in help_text
+
+
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path
     import pytest
 

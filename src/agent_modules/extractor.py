@@ -40,6 +40,24 @@ def is_capturable(element: PageElement) -> bool:
     return element.visible
 
 
+def is_actionable(element: PageElement) -> bool:
+    """Whether a model could have anything to *do* with this control.
+
+    A file input that already holds a file is the case this exists for, and it is not hypothetical:
+    an application wizard keeps its resume widget mounted in the page shell, so the same hidden input
+    appears on every step, already attached after the first upload. Showing it invites the model to
+    upload the resume again on page four - and because re-uploading the same file changes nothing,
+    the identical plan repeats until the run is declared stuck. There is nothing to do with an
+    attached file.
+
+    Kept separate from `is_capturable` on purpose: a form's *shape* does not change when a file is
+    attached, so the signature that keys the normaliser cache must still include it.
+    """
+    if element.input_type == "file" and element.file_attached:
+        return False
+    return is_capturable(element)
+
+
 def describe(snapshot: PageSnapshot) -> list[dict[str, Any]]:
     """The compact view handed to the normaliser.
 
@@ -48,7 +66,7 @@ def describe(snapshot: PageSnapshot) -> list[dict[str, Any]]:
     """
     described: list[dict[str, Any]] = []
     for element in snapshot.elements:
-        if not is_capturable(element):
+        if not is_actionable(element):
             continue
         described.append(
             {

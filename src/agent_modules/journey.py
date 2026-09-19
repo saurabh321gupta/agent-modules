@@ -224,6 +224,21 @@ class JourneyRenderer:
                 f"Budget             : {data.get('max_run_seconds', '')}s",
                 f"Elapsed            : {data.get('elapsed_s', '')}s",
             ]
+        if event == "resume_upload_chosen":
+            return [
+                "Resume upload      : ATTACHING BEFORE ANSWERING",
+                f"Target             : {data.get('field') or data.get('target')} ({data.get('target')})",
+                f"Asset              : {data.get('asset_id', '')}",
+                f"Jev confidence     : {data.get('confidence', '')}",
+                f"Page class         : {data.get('page_class', '')}",
+                str(data.get("note", "")),
+            ]
+        if event == "resume_upload_skipped":
+            return [
+                "Resume upload      : SKIPPED",
+                f"Target             : {data.get('field', '')}",
+                f"Reason             : {data.get('reason', '')}",
+            ]
         if event == "trace_started":
             return [
                 "Playwright trace   : RECORDING",
@@ -265,6 +280,16 @@ class JourneyRenderer:
             f"Form payload      : "
             f"{'normalised questions' if data.get('normalise', True) else 'raw snapshot (normalisation off)'}",
             f"Reasoning effort  : {data.get('reasoning_effort') or 'provider default'}",
+            f"Thinking          : normaliser "
+            f"{'on' if data.get('normaliser_thinking', False) else 'off'}, "
+            f"planner "
+            + (
+                "on"
+                if data.get("planner_thinking") is True
+                else "off"
+                if data.get("planner_thinking") is False
+                else "provider default"
+            ),
             f"Call timeout      : {data.get('request_timeout_s', '')}s "
             f"(hedged after {data.get('hedge_after_s', '')}s)",
             f"Run budget        : {data.get('max_run_seconds', '')}s",
@@ -391,6 +416,13 @@ class JourneyRenderer:
             f"Runner-up         : {', '.join(f'{n} {float(v):.2f}' for n, v in runner_up) or 'none'}",
             f"Next control      : {decision.get('control_label') or 'none'} "
             f"({float(decision.get('control_confidence') or 0):.2f})",
+            f"Resume upload     : "
+            + (
+                f"{decision.get('resume_control_id')} "
+                f"(confidence {float(decision.get('resume_confidence') or 0):.2f})"
+                if decision.get("resume_control_id")
+                else "none offered"
+            ),
             f"Submitted evidence: {float(decision.get('submitted_evidence') or 0):.2f}",
             f"Latency           : {data.get('latency_s', '')}s",
             f"Usage             : {data.get('usage')}",

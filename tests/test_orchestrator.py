@@ -218,8 +218,12 @@ def test_the_per_call_timeout_is_clamped_to_the_remaining_budget(tmp_path):
     logger.close()
 
 
-def test_the_per_call_timeout_has_a_floor(tmp_path):
-    """A fraction of a second left should not become a fraction-of-a-second timeout."""
+def test_the_per_call_timeout_is_never_raised_above_what_is_left(tmp_path):
+    """A floor above the remaining budget let a call start after it was already spent.
+
+    That is how a run six seconds past a 200s budget fired a five-second call: the duplicate cost
+    money, and the timeout it produced was reported as a planner failure rather than a clean stop.
+    """
     run, _, _, logger = make_run([], tmp_path=tmp_path)
 
     class FakeClient:
@@ -228,8 +232,34 @@ def test_the_per_call_timeout_has_a_floor(tmp_path):
     client = FakeClient()
     run.budgeted = [client]
     run.clamp_budget(0.4)
-    assert client.request_timeout_s == 5.0
+    assert client.request_timeout_s == 0.4
+    run.clamp_budget(-6.0)
+    assert client.request_timeout_s == 0.0, "never negative either"
     logger.close()
+
+
+def test_a_call_is_not_started_without_enough_budget(tmp_path):
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+
+    run.deadline = time.monotonic() + 1.0
+    assert run.has_time_for_a_call() is False
+
+    run.deadline = time.monotonic() + orchestrator.MIN_CALL_BUDGET_S + 1.0
+    assert run.has_time_for_a_call() is True
+    logger.close()
+
+
+def test_running_out_of_time_is_reported_as_a_timeout_not_a_failure(tmp_path):
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+    run.deadline = time.monotonic() - 1.0
+    result = run.budget_exhausted(FakePage(), steps=4)
+    assert result.status == "timeout"
+    assert result.steps == 4
+    assert "without submitting" in result.message
+    logger.close()
+    assert "EXHAUSTED - DISCARDING WITHOUT SUBMITTING" in (tmp_path / "j.log").read_text(
+        encoding="utf-8"
+    )
 
 
 # ----------------------------------------------------------------------------------- rejection
@@ -576,6 +606,97 @@ async def test_consent_checkboxes_are_ticked_before_the_planner_is_asked(tmp_pat
     assert planner.calls in (0, 1)
     assert result.status == "success"
     logger.close()
+
+
+# --------------------------------------------------------------------------------------- settling
+
+
+async def test_settle_does_not_wait_for_the_network_to_go_idle(monkeypatch, tmp_path):
+    """A modern page rarely reaches network-idle, so that wait burned its whole timeout per step.
+
+    Measured at ~1.7s of settle per step across fifteen steps - about 25s of one run.
+    """
+    async def no_overlays(page):
+        return []
+
+    monkeypatch.setattr("agent_modules.overlays.dismiss_nonessential_overlays", no_overlays)
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+    page = FakePage()
+    await run.settle(page)
+    assert page.load_state_waits == []
+    logger.close()
+
+
+async def test_settle_waits_until_the_page_stops_rendering(monkeypatch, tmp_path):
+    """Removing the old wait outright was a regression: a page observed mid-render gives a partial
+    form, the plan names ids that then move, and the batch dies before it finishes."""
+    async def no_overlays(page):
+        return []
+
+    monkeypatch.setattr("agent_modules.overlays.dismiss_nonessential_overlays", no_overlays)
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+    page = FakePage()
+    page.control_counts = [4, 9, 17, 25, 25, 25, 25]
+    await run.settle(page)
+    # 4 -> 9 -> 17 -> 25 (reset), then 25, 25 twice more before it is trusted.
+    assert page.control_counts == []
+    assert len(page.evaluations) >= 6
+    logger.close()
+
+
+async def test_settle_returns_promptly_once_the_count_holds(monkeypatch, tmp_path):
+    async def no_overlays(page):
+        return []
+
+    monkeypatch.setattr("agent_modules.overlays.dismiss_nonessential_overlays", no_overlays)
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+    page = FakePage()
+    await run.settle(page)
+    # One reading to establish the count, then the confirmations that trust it.
+    assert len(page.evaluations) == 1 + orchestrator.DOM_STABLE_READINGS
+    assert len(page.evaluations) < orchestrator.DOM_STABLE_READINGS * 5, "not a spin"
+    logger.close()
+
+
+async def test_a_probe_that_fails_stops_waiting_rather_than_hanging(monkeypatch, tmp_path):
+    """A page that cannot be probed is a page we cannot wait on; observing it is the next best step."""
+    async def no_overlays(page):
+        return []
+
+    monkeypatch.setattr("agent_modules.overlays.dismiss_nonessential_overlays", no_overlays)
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+
+    class Broken(FakePage):
+        async def evaluate(self, script, arg=None):
+            raise RuntimeError("page is gone")
+
+    await run.settle(Broken())
+    logger.close()
+
+
+async def test_settle_waits_again_after_dismissing_an_overlay(monkeypatch, tmp_path):
+    """That one is a page change we caused, so the page has to settle a second time."""
+    async def one_overlay(page):
+        return [{"kind": "cookie", "label": "Accept all"}]
+
+    monkeypatch.setattr("agent_modules.overlays.dismiss_nonessential_overlays", one_overlay)
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+    page = FakePage()
+    await run.settle(page)
+    settled = 1 + orchestrator.DOM_STABLE_READINGS
+    assert len(page.evaluations) == settled * 2, "once before the overlay and once after"
+    logger.close()
+
+
+async def test_an_overlay_cleanup_is_still_logged(monkeypatch, tmp_path):
+    async def one_overlay(page):
+        return [{"kind": "cookie", "label": "Accept all"}]
+
+    monkeypatch.setattr("agent_modules.overlays.dismiss_nonessential_overlays", one_overlay)
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+    await run.settle(FakePage())
+    logger.close()
+    assert "OVERLAY CLEANUP" in (tmp_path / "j.log").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path

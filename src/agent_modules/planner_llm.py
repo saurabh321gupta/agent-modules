@@ -29,6 +29,7 @@ class LLMPlanner:
         answer_bank: dict[str, str] | None = None,
         journey: JourneyLogger | None = None,
         system_prompt: str = MAIN_SYSTEM_PROMPT,
+        thinking: bool | None = None,
     ) -> None:
         self.client = client
         self.model = model
@@ -37,6 +38,10 @@ class LLMPlanner:
         self.answer_bank = answer_bank or {}
         self.journey = journey
         self.system_prompt = system_prompt
+        #: None leaves the provider's own default in place. Answering a form involves real judgement
+        #: - matching a fact to a question, choosing between similar options - so this is left alone
+        #: unless a caller has measured that turning it off holds up.
+        self.thinking = thinking
         #: Escape hatch: set after a plan is rejected for choosing an option we did not send.
         self.include_all_options = False
         #: Reported by the orchestrator in STEP TIMING.
@@ -83,6 +88,10 @@ class LLMPlanner:
                     # the page knows.
                     "options": [{"value": o.value, "label": o.label} for o in field.options],
                     "current_value": live[field.id].value if field.id in live else None,
+                    # Whether a checkbox or radio is already set. `value` on those is the HTML value
+                    # attribute, not the state, so without this the model cannot tell a ticked box
+                    # from an empty one and has to guess whether to touch it.
+                    "checked": live[field.id].checked if field.id in live else None,
                     # True when the site has flagged this control as holding a bad value.
                     "rejected": live[field.id].invalid if field.id in live else False,
                 }
@@ -126,6 +135,7 @@ class LLMPlanner:
                 schema=ApplicationPlan.model_json_schema(),
                 schema_name="application_plan",
                 model=self.model,
+                thinking=self.thinking,
             )
             if self.journey:
                 self.journey.log(

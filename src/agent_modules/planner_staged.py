@@ -49,6 +49,9 @@ class PageDecision(BaseModel):
     control_label: str | None = None
     control_confidence: float = 0.0
     submitted_evidence: float = 0.0
+    #: The file input that should receive the resume, when the page offers one and still needs it.
+    resume_control_id: str | None = None
+    resume_confidence: float = 0.0
 
 
 class StagedPlanner:
@@ -57,12 +60,15 @@ class StagedPlanner:
         classifier: Any,
         normalizer: Normalizer,
         planner: LLMPlanner,
+        assets: dict[str, str] | None = None,
         normalise: bool = True,
         journey: JourneyLogger | None = None,
     ) -> None:
         self.classifier = classifier
         self.normalizer = normalizer
         self.planner = planner
+        #: The assets registered for this run, so the resume can be attached without a path.
+        self.assets = assets or {}
         #: Off sends the raw snapshot to the planner instead of normalised questions.
         self.normalise = normalise
         self.journey = journey
@@ -75,6 +81,15 @@ class StagedPlanner:
         history: list[dict[str, Any]],
     ) -> ApplicationPlan:
         decision = await self.classify(snapshot)
+
+        # Checked before the page class, deliberately. An upload is a precondition rather than a kind
+        # of page: a wizard step cannot be answered until the resume it is waiting for has arrived, and
+        # the site usually fills fields in from it. Uploading first also means the page is re-read
+        # afterwards, so whatever the site populates is answered rather than guessed at.
+        upload = self.resume_branch(profile, snapshot, decision)
+        if upload is not None:
+            return upload
+
         branch = decision.page_class
         if branch in ("captcha", "login"):
             return self.plan(
@@ -103,7 +118,8 @@ class StagedPlanner:
     async def classify(self, snapshot: PageSnapshot) -> PageDecision:
         controls = classify_controls(snapshot)
         buttons = [c for c in controls if c["role"] == "button" and c["enabled"]]
-        questions = classify_questions(buttons)
+        file_inputs = [c for c in controls if c["input_type"] == "file" and c["enabled"]]
+        questions = classify_questions(buttons, file_inputs)
         state = classify_state(snapshot, controls)
         started = time.perf_counter()
         if self.journey:
@@ -111,6 +127,7 @@ class StagedPlanner:
                 "classify_request",
                 payload={"state": state, "questions": questions},
                 button_count=len(buttons),
+                file_input_count=len(file_inputs),
             )
         try:
             response = await self.classifier.ask(state, questions)
@@ -124,7 +141,7 @@ class StagedPlanner:
             return PageDecision(page_class="application_form")
         latency = time.perf_counter() - started
         answers = response.get("answers", {})
-        decision = self.decide(answers, buttons)
+        decision = self.decide(answers, buttons, file_inputs)
         if self.journey:
             self.journey.log(
                 "page_classified",
@@ -135,7 +152,12 @@ class StagedPlanner:
             )
         return decision
 
-    def decide(self, answers: dict[str, Any], buttons: list[dict[str, Any]]) -> PageDecision:
+    def decide(
+        self,
+        answers: dict[str, Any],
+        buttons: list[dict[str, Any]],
+        file_inputs: list[dict[str, Any]] | None = None,
+    ) -> PageDecision:
         classification = answers.get("page_class") or {}
         page_class = classification.get("choice")
         if not isinstance(page_class, str) or page_class not in PAGE_CLASSES:
@@ -148,6 +170,18 @@ class StagedPlanner:
         known = {c["id"]: c for c in buttons}
         if not isinstance(control_id, str) or control_id not in known:
             control_id = None
+
+        # The resume verdict is only honoured when Jev both says the page wants a resume and names a
+        # control that really is one of this page's file inputs. An id it invented is discarded, same
+        # discipline as the plan validator.
+        resume = answers.get("resume_upload_control") or {}
+        resume_choice = resume.get("choice")
+        file_ids = {c["id"] for c in (file_inputs or [])}
+        offered = (answers.get("has_resume_upload") or {}).get("choice") == "yes"
+        resume_control_id = (
+            resume_choice if offered and isinstance(resume_choice, str) and resume_choice in file_ids else None
+        )
+
         return PageDecision(
             page_class=page_class,  # type: ignore[arg-type]
             confidence=confidence,
@@ -156,7 +190,76 @@ class StagedPlanner:
             control_label=known[control_id]["label"] if control_id else None,
             control_confidence=float(control.get("confidence") or 0),
             submitted_evidence=float((answers.get("submitted_evidence") or {}).get("noul") or 0),
+            resume_control_id=resume_control_id,
+            resume_confidence=float(resume.get("confidence") or 0),
         )
+
+    # ------------------------------------------------------------------ resume upload
+
+    def resume_branch(
+        self,
+        profile: CandidateProfile,
+        snapshot: PageSnapshot,
+        decision: PageDecision,
+    ) -> ApplicationPlan | None:
+        """Attach the resume when the page is waiting for one, or None to carry on as before.
+
+        Returning a plan ends the step here. The executor performs the upload and stops the batch, and
+        the loop re-observes, so the page that follows is treated as a fresh page rather than answered
+        against the state that preceded the upload - which is what a site that fills fields in from
+        the resume needs.
+        """
+        if not decision.resume_control_id:
+            return None
+        element = next((e for e in snapshot.elements if e.id == decision.resume_control_id), None)
+        if element is None or element.input_type != "file":
+            return None
+        if element.file_attached:
+            # Nothing to do: an upload here changes nothing, and the batch would end on a no-op.
+            return None
+        asset = self.registered_asset(profile)
+        if asset is None:
+            if self.journey:
+                self.journey.log(
+                    "resume_upload_skipped",
+                    field=element.label or element.id,
+                    reason=(
+                        "Jev found a resume upload, but the profile declares no asset that this run "
+                        "registered, so there is no file to attach."
+                    ),
+                )
+            return None
+        if self.journey:
+            self.journey.log(
+                "resume_upload_chosen",
+                field=element.label or element.id,
+                target=element.id,
+                asset_id=asset,
+                confidence=decision.resume_confidence,
+                page_class=decision.page_class,
+                note=(
+                    "Uploading before answering: the page is checked for a resume first, and whatever "
+                    "this brings back is treated as a new page."
+                ),
+            )
+        return self.plan(
+            snapshot,
+            "continue",
+            f"Attach the resume to {element.label or element.id} before answering this page "
+            f"(Jev confidence {decision.resume_confidence:.2f}).",
+            [self.action("upload", element.id, asset_id=asset)],
+            decision,
+        )
+
+    def registered_asset(self, profile: CandidateProfile) -> str | None:
+        """The asset the profile declares, but only when this run registered it."""
+        for document in (profile.documents or {}).values():
+            if not isinstance(document, dict):
+                continue
+            asset_id = document.get("asset_id")
+            if isinstance(asset_id, str) and asset_id in self.assets:
+                return asset_id
+        return None
 
     # --------------------------------------------------------------------------------- branches
 

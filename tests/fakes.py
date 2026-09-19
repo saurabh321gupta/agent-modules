@@ -11,6 +11,15 @@ from typing import Any
 from agent_modules.llm_client import Completion
 
 
+def thinking_of(call: dict[str, Any]) -> Any:
+    """The thinking setting a `ModelClient` call carries.
+
+    This is the port's own parameter. What the SDK receives is a different shape - a provider field
+    has to travel in `extra_body` - and `test_llm_client` asserts on that directly.
+    """
+    return call.get("thinking")
+
+
 class FakeModelClient:
     """A `ModelClient` that replies from a queue. Implements both call styles."""
 
@@ -49,9 +58,16 @@ class FakeModelClient:
         response_format: dict[str, Any] | None = None,
         model: str | None = None,
         timeout_s: float | None = None,
+        thinking: bool | None = None,
     ) -> Completion:
         self.calls.append(
-            {"messages": messages, "response_format": response_format, "model": model, "kind": "complete"}
+            {
+                "messages": messages,
+                "response_format": response_format,
+                "model": model,
+                "thinking": thinking,
+                "kind": "complete",
+            }
         )
         return Completion(
             text=self._next_reply(),
@@ -71,10 +87,17 @@ class FakeModelClient:
         schema_name: str = "response",
         model: str | None = None,
         timeout_s: float | None = None,
+        thinking: bool | None = None,
     ) -> Completion:
         messages = build_messages(self.schema_mode)
         self.calls.append(
-            {"messages": messages, "schema_name": schema_name, "model": model, "kind": "complete_json"}
+            {
+                "messages": messages,
+                "schema_name": schema_name,
+                "model": model,
+                "thinking": thinking,
+                "kind": "complete_json",
+            }
         )
         return Completion(
             text=self._next_reply(),

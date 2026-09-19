@@ -106,6 +106,13 @@ def test_batch_and_choice_limits_are_sane():
     assert MAX_CHOICES == 255
 
 
+def test_thinking_defaults():
+    """Normalisation reasons for nothing; answering is left to the provider until it is measured."""
+    config = RunConfig()
+    assert config.normaliser_thinking is False
+    assert config.planner_thinking is None
+
+
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path
     import pytest
 

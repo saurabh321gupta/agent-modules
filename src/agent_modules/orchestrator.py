@@ -25,6 +25,7 @@ from playwright.async_api import async_playwright
 from .config import HEADLESS_VIEWPORT, MIN_AUTO_ZOOM, RunConfig
 from .executor import BrowserExecutor
 from .journey import JourneyLogger
+from .llm_client import ModelTimeoutError
 from .normalizer import Normalizer
 from .planner_jev import JevPlanner, LlmFieldAssist
 from .planner_llm import LLMPlanner
@@ -46,6 +47,12 @@ NO_PROGRESS_LIMIT = 3
 STALE_PLAN_LIMIT = 3
 #: How long to wait for a disabled control to come back, without spending a model call.
 DISABLED_WAIT_MS = 6_000
+#: How many consecutive identical control counts mean a page has finished rendering.
+DOM_STABLE_READINGS = 3
+#: How long to wait between those probes.
+DOM_PROBE_INTERVAL_MS = 60
+#: Below this much remaining budget, a model call is not worth starting: it cannot finish in time.
+MIN_CALL_BUDGET_S = 5.0
 #: A slice of the budget is kept back so teardown and the final observe always fit inside it.
 DISABLED_TARGET = re.compile(r"Target (\S+) is disabled")
 
@@ -73,7 +80,12 @@ def build_planner(
         budgeted.append(classifier)
         planner = StagedPlanner(
             classifier,
-            Normalizer(llm_client, config.model, journey=journey),
+            Normalizer(
+                llm_client,
+                config.model,
+                journey=journey,
+                thinking=config.normaliser_thinking,
+            ),
             LLMPlanner(
                 llm_client,
                 config.model,
@@ -82,7 +94,9 @@ def build_planner(
                 config.answers,
                 journey=journey,
                 system_prompt=FORM_SYSTEM_PROMPT,
+                thinking=config.planner_thinking,
             ),
+            assets,
             normalise=config.normalise,
             journey=journey,
         )
@@ -100,7 +114,13 @@ def build_planner(
         )
     else:
         planner = LLMPlanner(
-            llm_client, config.model, assets, config.defaults, config.answers, journey=journey
+            llm_client,
+            config.model,
+            assets,
+            config.defaults,
+            config.answers,
+            journey=journey,
+            thinking=config.planner_thinking,
         )
     return planner, budgeted, closeable
 
@@ -141,6 +161,8 @@ async def run_application(
         request_timeout_s=config.request_timeout_s,
         hedge_after_s=config.hedge_after_s,
         max_run_seconds=config.max_run_seconds,
+        normaliser_thinking=config.normaliser_thinking,
+        planner_thinking=config.planner_thinking,
         trace_path=config.trace_path,
         defaults=config.defaults,
         asset_ids=sorted(assets),
@@ -338,22 +360,7 @@ class _ApplicationRun:
         for step in range(1, self.config.max_steps + 1):
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
-                self.journey.log(
-                    "run_timeout",
-                    max_run_seconds=self.config.max_run_seconds,
-                    elapsed_s=round(self.config.max_run_seconds - remaining, 1),
-                )
-                return RunResult(
-                    status="timeout",
-                    message=(
-                        f"Discarded without submitting: the {self.config.max_run_seconds:.0f}s "
-                        "budget was exhausted."
-                    ),
-                    url=page.url,
-                    steps=step - 1,
-                    evidence=None,
-                    action_results=self.results,
-                )
+                return self.budget_exhausted(page, step - 1)
             self.clamp_budget(remaining)
             outcome = await self.step(page, planner, executor, step)
             if outcome is not None:
@@ -368,10 +375,44 @@ class _ApplicationRun:
             action_results=self.results,
         )
 
+    def budget_exhausted(self, page: Any, steps: int) -> RunResult:
+        """Stop because the run has run out of time, and say so rather than reporting a failure.
+
+        A call started with seconds left is guaranteed to time out, so the run is better off stopping
+        cleanly. Reporting that as `failed` also misreads: nothing broke, the clock ran out.
+        """
+        remaining = self.deadline - time.monotonic()
+        self.journey.log(
+            "run_timeout",
+            max_run_seconds=self.config.max_run_seconds,
+            elapsed_s=round(self.config.max_run_seconds - remaining, 1),
+            unfinished_step=remaining < 0,
+        )
+        return RunResult(
+            status="timeout",
+            message=(
+                f"Discarded without submitting: the {self.config.max_run_seconds:.0f}s "
+                "budget was exhausted."
+            ),
+            url=page.url,
+            steps=steps,
+            evidence=None,
+            action_results=self.results,
+        )
+
     def clamp_budget(self, remaining: float) -> None:
-        """Give every in-flight client a per-call bound that cannot outlive the run."""
+        """Give every in-flight client a per-call bound that cannot outlive the run.
+
+        Capped by what is actually left, with no floor above it: a floor would let a call start after
+        the budget was already spent, which both costs money and turns a clean timeout into a
+        confusing planner error.
+        """
         for client in self.budgeted:
-            client.request_timeout_s = max(5.0, min(self.config.request_timeout_s, remaining))
+            client.request_timeout_s = max(0.0, min(self.config.request_timeout_s, remaining))
+
+    def has_time_for_a_call(self) -> bool:
+        """Whether the remaining budget is worth starting a model call with."""
+        return (self.deadline - time.monotonic()) >= MIN_CALL_BUDGET_S
 
     async def step(
         self, page: Any, planner: Any, executor: BrowserExecutor, step: int
@@ -466,19 +507,56 @@ class _ApplicationRun:
             )
 
     async def settle(self, page: Any) -> None:
-        try:
-            await page.wait_for_load_state("networkidle", timeout=self.config.step_settle_timeout_ms)
-        except Exception:
-            pass
+        """Wait for the page to stop painting, then clear obstructive overlays.
+
+        There is deliberately no wait for the network to go idle. A modern page rarely reaches
+        network-idle, so that call burned its entire timeout on every step - most of a measured ~1.7s
+        per-step settle across fifteen steps, and about 25s of one run.
+
+        Deleting it outright was wrong, though, and a live run showed why: the page was observed
+        mid-render, the snapshot held 17 controls where the finished page had 25, the plan named
+        element ids that then moved, and the batch died before it reached an upload it had planned.
+        The condition that matters is not "is the network quiet" but "has the form stopped changing",
+        which costs a cheap probe and usually returns in a fraction of the old timeout.
+        """
+        await self.wait_for_dom_to_settle(page)
+
         from .overlays import dismiss_nonessential_overlays
 
         overlay_actions = await dismiss_nonessential_overlays(page)
         if overlay_actions:
             self.journey.log("overlay_cleanup", actions=overlay_actions)
+            # That was a page change we caused ourselves, so let it finish before observing.
+            await self.wait_for_dom_to_settle(page)
+
+    async def wait_for_dom_to_settle(self, page: Any) -> None:
+        """Return once the page's control count has held steady, or the budget runs out.
+
+        Stability is counted in consecutive identical readings rather than in wall-clock time, which
+        makes it deterministic: a page still adding controls resets the count, and a page that has
+        finished returns after a few cheap probes rather than sitting out a full-timeout sleep.
+        """
+        probe = (
+            "() => document.querySelectorAll("
+            "'input, textarea, select, button, [role=\"button\"], [role=\"combobox\"], [role=\"checkbox\"], [role=\"radio\"]'"
+            ").length"
+        )
+        deadline = time.monotonic() + max(self.config.step_settle_timeout_ms, 1) / 1_000
+        previous: int | None = None
+        stable = 0
+        while time.monotonic() < deadline:
             try:
-                await page.wait_for_load_state("networkidle", timeout=500)
+                current = await page.evaluate(probe)
             except Exception:
-                pass
+                return
+            if current == previous:
+                stable += 1
+                if stable >= DOM_STABLE_READINGS:
+                    return
+            else:
+                previous = current
+                stable = 0
+            await page.wait_for_timeout(DOM_PROBE_INTERVAL_MS)
 
     async def fit_zoom(self, page: Any) -> None:
         if self.config.zoom != 1.0:
@@ -513,6 +591,11 @@ class _ApplicationRun:
         step: int,
         timings: dict[str, float],
     ) -> RunResult | None:
+        # Everything cheap is done; this is the point where the run spends money and wall clock on a
+        # model call, so a budget too small to finish one is a reason to stop rather than to try.
+        if not self.has_time_for_a_call():
+            return self.budget_exhausted(page, step - 1)
+
         plan: ApplicationPlan | None = None
         try:
             plan_started = time.perf_counter()
@@ -528,6 +611,9 @@ class _ApplicationRun:
         except PlanValidationError as exc:
             return await self.on_rejected(page, planner, executor, snapshot, plan, step, str(exc), timings)
         except Exception as exc:
+            if isinstance(exc, ModelTimeoutError) and not self.has_time_for_a_call():
+                # The call was cut short because the run ran out of time, not because anything broke.
+                return self.budget_exhausted(page, step - 1)
             return RunResult(
                 status="failed",
                 message=f"Planner error: {exc}",

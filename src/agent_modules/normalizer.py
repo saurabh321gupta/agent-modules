@@ -15,7 +15,13 @@ import json
 import time
 from typing import Any
 
-from .extractor import describe, field_type_for, form_signature, is_capturable, page_kind_of
+from .extractor import (
+    describe,
+    field_type_for,
+    form_signature,
+    is_actionable,
+    page_kind_of,
+)
 from .journey import JourneyLogger
 from .llm_client import ModelClient
 from .models import NormalisedField, NormalisedForm, PageSnapshot
@@ -66,10 +72,20 @@ Return only JSON of the shape
 class Normalizer:
     """Turns a page's controls into canonical questions, with the exact payloads logged."""
 
-    def __init__(self, client: ModelClient, model: str, journey: JourneyLogger | None = None) -> None:
+    def __init__(
+        self,
+        client: ModelClient,
+        model: str,
+        journey: JourneyLogger | None = None,
+        thinking: bool | None = False,
+    ) -> None:
         self.client = client
         self.model = model
         self.journey = journey
+        #: Off by default. Describing what a field asks is extraction, not deduction, so the
+        #: reasoning tokens a thinking model spends here buy nothing: measured on a real 30 KB form
+        #: payload, the same result took 7.4s with thinking and 2.5s without.
+        self.thinking = thinking
         self._cache: dict[str, NormalisedForm] = {}
 
     async def normalise(self, snapshot: PageSnapshot) -> NormalisedForm:
@@ -107,6 +123,7 @@ class Normalizer:
             messages=messages,
             response_format={"type": "json_object"},
             model=self.model,
+            thinking=self.thinking,
         )
         if self.journey:
             self.journey.log(
@@ -171,9 +188,10 @@ class Normalizer:
             )
 
         # Any control the model skipped is still reported, so nothing silently disappears. This uses
-        # the same filter as `describe`, so a control the model was never shown is also never lost.
+        # the same filter as `describe`, so a control the model was never shown is also never lost -
+        # and a file input that already holds a file is not resurrected here either.
         for element in snapshot.elements:
-            if element.id in seen or not is_capturable(element):
+            if element.id in seen or not is_actionable(element):
                 continue
             fields.append(
                 NormalisedField(

@@ -300,6 +300,92 @@ def test_the_real_sdk_client_disables_its_own_retries():
     assert client._client.max_retries == 0
 
 
+# ------------------------------------------------------------------------------------- thinking
+
+
+async def test_thinking_can_be_switched_off_for_a_call():
+    """The only control that actually stops this provider reasoning.
+
+    Measured against a real 30 KB form payload: 24.5s with thinking, 2.4s without, same task.
+    `reasoning_effort` alone barely restrained it.
+    """
+
+    async def handler(body, n):
+        return fake_response()
+
+    client, transport = client_with(handler)
+    await client.complete(messages=[], thinking=False)
+    assert transport.bodies[0]["extra_body"]["thinking"] == {"type": "disabled"}
+
+
+async def test_thinking_can_be_switched_on_explicitly():
+    async def handler(body, n):
+        return fake_response()
+
+    client, transport = client_with(handler)
+    await client.complete(messages=[], thinking=True)
+    assert transport.bodies[0]["extra_body"]["thinking"] == {"type": "enabled"}
+
+
+async def test_thinking_is_absent_when_not_requested():
+    """Absent leaves the provider's own default, which is not the same as switching it off."""
+
+    async def handler(body, n):
+        return fake_response()
+
+    client, transport = client_with(handler)
+    await client.complete(messages=[])
+    assert "extra_body" not in transport.bodies[0]
+
+
+async def test_thinking_reaches_the_structured_call_too():
+    """The planner and the normaliser both go through complete_json."""
+
+    async def handler(body, n):
+        return fake_response("{}")
+
+    client, transport = client_with(handler)
+    await client.complete_json(build_messages=lambda m: [], schema={}, thinking=False)
+    assert transport.bodies[0]["extra_body"]["thinking"] == {"type": "disabled"}
+
+
+async def test_thinking_survives_the_schema_fallback():
+    """The retry must keep the setting, or a fallback would silently re-enable reasoning."""
+
+    async def handler(body, n):
+        if body["response_format"]["type"] == "json_schema":
+            raise RuntimeError("response_format is unavailable")
+        return fake_response("{}")
+
+    client, transport = client_with(handler)
+    await client.complete_json(build_messages=lambda m: [], schema={}, thinking=False)
+    assert len(transport.bodies) == 2
+    assert all(body["extra_body"]["thinking"] == {"type": "disabled"} for body in transport.bodies)
+
+
+def test_every_key_the_client_sends_is_one_the_sdk_accepts():
+    """A provider-specific field must travel in extra_body, or the SDK rejects the whole call.
+
+    This was a real failure. `thinking` sent as a top-level keyword raised
+    "AsyncCompletions.create() got an unexpected keyword argument 'thinking'" - and only on a live
+    call, because the fakes accept anything. Checking the signature catches it offline.
+    """
+    import inspect
+
+    from openai.resources.chat.completions import AsyncCompletions
+
+    accepted = set(inspect.signature(AsyncCompletions.create).parameters) | {"self"}
+    client = DeepSeekClient(model="m", api_key="k", base_url="https://example.invalid/v1")
+    bodies = [
+        client._body([{"role": "user", "content": "x"}], None, None),
+        client._body([], {"type": "json_object"}, "m", False),
+        client._body([], {"type": "json_object"}, "m", True),
+    ]
+    for body in bodies:
+        unknown = sorted(set(body) - accepted)
+        assert not unknown, f"the SDK would reject these keys: {unknown}"
+
+
 async def test_closing_a_client_without_a_close_method_is_safe():
     class Bare:
         pass

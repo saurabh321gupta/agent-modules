@@ -19,10 +19,28 @@ MAX_OPTIONS_SENT = 1000
 FILLED_OPTION_WINDOW = 12
 
 UPLOAD_RULE = (
-    "- A question whose field_type is file is answered with an upload action, carrying the asset_id "
-    "of the matching document from candidate_profile.documents. Never skip a file field and never "
-    "treat it as a button: a required upload left unattended blocks the form from advancing, and the "
-    "page's own validation message often never appears in the snapshot."
+    "- A file question is answered with an upload action, carrying the asset_id of the matching "
+    "document from candidate_profile.documents. Never treat a file field as a button, and never skip "
+    "an empty one: a required upload left unattended blocks the form from advancing, and the page's "
+    "own validation message often never appears in the snapshot. A file field that already holds a "
+    "file is not offered to you at all, so any file question you can see is one that needs a file."
+)
+
+BATCH_RULE = (
+    "- A click, an upload and a scroll each end the batch, so at most one of them can take effect: "
+    "everything after the first is silently dropped. Put the fills, selects and checkboxes you can "
+    "justify first, then at most one action that changes the page. Never pair an upload with a "
+    "click - only the upload would happen, and the page would not advance."
+)
+
+FILLED_RULE = (
+    "- A field that already holds an answer is not a question to answer: leave it out of the plan "
+    "entirely. Do not re-fill a text field, re-select a dropdown, or re-tick a checkbox that already "
+    "holds the value you would give it - current_value says what a field contains, and checked says "
+    "whether a checkbox or radio is already set. Repeating a satisfied action wastes a step, and on a "
+    "controlled form it can overwrite what the site itself put there, which a wizard commonly does "
+    "from an uploaded document. The one exception is a control the site has rejected, marked "
+    '"rejected": true or named in validation_errors: that one has to be corrected rather than left alone.'
 )
 
 REJECTION_RULE = (
@@ -111,7 +129,7 @@ the supplied text. Match on meaning rather than exact wording: "How did you hear
 "How did you hear about this job?". Copy the answer verbatim; do not reword, round, reformat, or
 shorten it. When a field is covered by neither the profile nor this bank, use the low-stakes rules
 above and stop only when the missing answer is materially significant.
-""".strip() + "\n" + UPLOAD_RULE + "\n" + REJECTION_RULE
+""".strip() + "\n" + UPLOAD_RULE + "\n" + BATCH_RULE + "\n" + FILLED_RULE + "\n" + REJECTION_RULE
 
 
 FORM_SYSTEM_PROMPT = """You are the answering component of a job-application assistant.
@@ -146,11 +164,13 @@ Rules:
   job-alert signup boxes, search boxes.
 %s
 %s
+%s
+%s
 - Never complete the application while a required question is unanswered. When a required question
   cannot be grounded in the profile or the approved answers, return needs_input naming it.
 - Click a submit control only once every required question is answered.
 - Return complete only with visible evidence that the application was received.
-""" % (UPLOAD_RULE, REJECTION_RULE)
+""" % (UPLOAD_RULE, BATCH_RULE, FILLED_RULE, REJECTION_RULE)
 
 
 def with_schema(system_prompt: str, mode: str) -> str:

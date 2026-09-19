@@ -76,6 +76,17 @@ class RunConfig:
     hedge_after_s: float = 30.0
     max_run_seconds: float = 300.0
 
+    #: Whether the provider's reasoning is left on for each kind of call.
+    #:
+    #: Normalisation is off by default because describing what a field asks is extraction, not
+    #: deduction: measured against a real 30 KB form payload, the same answer took 7.4s with
+    #: reasoning and 2.5s without, and it is a quarter of a run.
+    #:
+    #: Answering is left to the provider by default, because matching a fact to a question and
+    #: choosing between similar options is real judgement. Set it explicitly to measure the trade.
+    normaliser_thinking: bool = False
+    planner_thinking: bool | None = None
+
     def __post_init__(self) -> None:
         self.base_url = self.base_url or os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL)
         self.api_key = self.api_key or os.getenv("EXPLABS_API_KEY") or os.getenv("OPENAI_API_KEY")

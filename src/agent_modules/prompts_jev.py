@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from .config import MAX_CHOICES
+from .extractor import is_actionable
 from .models import CandidateProfile, PageElement, PageSnapshot
 
 #: How many answer-bank entries are offered for one field. Every profile fact is offered; the longer
@@ -58,6 +59,10 @@ Also choose which single control the candidate should press next. On an advert t
 that starts the application. On a form step it is the control that moves to the next step. Never
 choose a button that merely signs up for job alerts, a newsletter or a search.
 
+And say whether the page offers a way to upload a resume, naming the control that would receive the
+file. Uploading comes before anything else on a page: a wizard step cannot be answered until the
+resume it is waiting for has arrived, and the site often fills fields in from it.
+
 And say whether the page visibly confirms the application was already received."""
 
 PAGE_CLASS_CRITERIA = {
@@ -74,7 +79,20 @@ NEXT_CONTROL_INSTRUCTIONS = (
     "Which single control should the candidate press next? On an advert choose the "
     "control that starts the application. On a form step choose the one that moves "
     "forward. Never choose a control that only signs up for job alerts, a newsletter "
-    "or a search."
+    "or a search. Never choose a control that uploads a file."
+)
+
+RESUME_UPLOAD_INSTRUCTIONS = (
+    "Does this page offer a way to upload a resume? Answer 'yes' only when the page carries a control "
+    "that accepts a file for the candidate's CV. A page that merely mentions a resume in its text "
+    "does not offer one, and a file control asking for something else - a cover letter, a transcript, "
+    "a portfolio - is not a resume upload."
+)
+
+RESUME_CONTROL_INSTRUCTIONS = (
+    "Which control receives the resume file? Name the file input itself - the element the browser "
+    "would actually be handed the file - not the styled button in front of it. Prefer a control whose "
+    "wording mentions a resume or CV over one that does not, and use 'none' if none of them does."
 )
 
 FORM_PAGE_KINDS = {
@@ -155,6 +173,13 @@ def shortlist(label: str, candidates: dict[str, str], limit: int = SHORTLIST) ->
 
 
 def classify_controls(snapshot: PageSnapshot) -> list[dict[str, Any]]:
+    """The controls the classifier is shown, including a file input that still needs a file.
+
+    A file input is offered even when it is hidden, because the real one usually is - a styled button
+    stands in front of it. It is left out once it holds a file, since there is then nothing to do
+    with it, which is also what keeps the resume questions off every later page of a wizard whose
+    upload widget stays mounted in the page shell.
+    """
     return [
         {
             "id": element.id,
@@ -164,11 +189,14 @@ def classify_controls(snapshot: PageSnapshot) -> list[dict[str, Any]]:
             "enabled": element.enabled,
         }
         for element in snapshot.elements
-        if element.visible and element.role in ("button", "combobox", "textbox")
+        if is_actionable(element) and element.role in ("button", "combobox", "textbox")
     ]
 
 
-def classify_questions(buttons: list[dict[str, Any]]) -> dict[str, Any]:
+def classify_questions(
+    buttons: list[dict[str, Any]],
+    file_inputs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     questions: dict[str, Any] = {
         "page_class": {
             "type": "choice",
@@ -183,6 +211,23 @@ def classify_questions(buttons: list[dict[str, Any]]) -> dict[str, Any]:
             ),
         },
     }
+    # Asked on every page, before the class is even considered: an upload is the one thing that has
+    # to happen before a wizard step can be answered, and the control that takes the file is often
+    # invisible, so a model reading the page is better placed to find it than any selector rule.
+    if file_inputs:
+        questions["has_resume_upload"] = {
+            "type": "choice",
+            "instructions": RESUME_UPLOAD_INSTRUCTIONS,
+            "criteria": {
+                "yes": "This page offers a way to upload a resume",
+                "no": "It does not, or the control accepts some other document",
+            },
+        }
+        questions["resume_upload_control"] = {
+            "type": "choice",
+            "instructions": RESUME_CONTROL_INSTRUCTIONS,
+            "criteria": {c["id"]: (c["label"] or c["id"]) for c in file_inputs},
+        }
     if buttons:
         questions["next_control"] = {
             "type": "choice",

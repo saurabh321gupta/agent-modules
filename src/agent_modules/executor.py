@@ -19,6 +19,9 @@ from .journey import JourneyLogger
 from .models import Action, ActionResult, CandidateProfile, PageSnapshot
 from .validator import resolve_profile_ref
 
+#: How long to let the site process an uploaded file before observing the page again.
+UPLOAD_SETTLE_MS = 2_000
+
 
 def structure_of(snapshot: PageSnapshot) -> list[tuple[str, str, str, str | None]]:
     """The shape of a page, ignoring values. Used to decide whether re-tagging is safe."""
@@ -174,6 +177,11 @@ class BrowserExecutor:
             if not os.path.isfile(path):
                 raise RuntimeError(f"Upload asset does not exist: {action.asset_id}")
             await locator.set_input_files(path)
+            # An upload is not finished when the file is handed over: the site has to read it, and a
+            # wizard commonly populates fields and re-renders from it. Waiting here is what makes the
+            # next observation a settled page rather than a half-processed one. Uploads are rare
+            # enough that a couple of seconds costs nothing worth having.
+            await self.page.wait_for_timeout(UPLOAD_SETTLE_MS)
         elif action.type == "click":
             assert locator is not None
             try:

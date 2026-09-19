@@ -68,6 +68,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="low",
         help="Planner reasoning effort; 'default' leaves it to the provider (default: low, substantially faster)",
     )
+    parser.add_argument(
+        "--normaliser-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Leave the provider's reasoning on while normalising a form. Off by default: describing a field is extraction, not deduction, and reasoning there is most of a normalise call's latency",
+    )
+    parser.add_argument(
+        "--planner-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Leave the provider's reasoning on while answering a form. Unset by default, which leaves the provider's own choice: answering involves real judgement, so turn it off only after measuring the quality of the plans it produces",
+    )
     parser.add_argument("--no-submit", action="store_false", dest="allow_submit", help="Do not click the final submission control (submission happens by default)")
     parser.add_argument("--no-default-consents", action="store_true", help="Do not automatically accept matching consent/privacy checkboxes")
     parser.add_argument("--output", help="Write the run result to JSON")
@@ -99,6 +111,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         hedge_after_s=args.hedge_after,
         trace_path=args.trace,
         reasoning_effort=None if args.effort == "default" else args.effort,
+        normaliser_thinking=args.normaliser_thinking,
+        planner_thinking=args.planner_thinking,
     )
 
 

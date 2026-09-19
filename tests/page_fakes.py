@@ -79,10 +79,15 @@ class FakePage:
         self.pressed: list[tuple[str, str]] = []
         self.scrolled_to: list[str] = []
         self.waits: list[tuple[str, str]] = []
+        self.load_state_waits: list[str] = []
         self.evaluations: list[Any] = []
         self.timeouts: list[int] = []
         self.goto_error: Exception | None = None
         self.fail_locate_on: set[str] = set()
+        #: What a control-count probe reports. Scripted values are consumed first, so a test can
+        #: simulate a page that is still rendering and then settles.
+        self.control_count = 5
+        self.control_counts: list[int] = []
         # Defaults to the shape the readiness probe unpacks, so a fake page is treated as rendered
         # immediately rather than making every test wait out the settle timeout.
         self.evaluate_result: Any = [1, 1]
@@ -98,13 +103,24 @@ class FakePage:
         self.url = url
 
     async def wait_for_load_state(self, state: str, timeout: float | None = None) -> None:
-        return None
+        self.load_state_waits.append(state)
 
     async def wait_for_timeout(self, ms: int) -> None:
         self.timeouts.append(ms)
 
     async def evaluate(self, script: Any, arg: Any = None) -> Any:
         self.evaluations.append(arg if arg is not None else script)
+        if not isinstance(script, str):
+            return self.evaluate_result
+        # The readiness probe also ends in `.length`, and it unpacks a pair. Check it first, or it
+        # falls through to a count and the caller waits out its whole timeout on an unpack error.
+        if "innerText" in script:
+            return self.evaluate_result
+        # A control-count probe: a stable number ends the settle wait at once.
+        if ".length" in script:
+            if self.control_counts:
+                return self.control_counts.pop(0)
+            return self.control_count
         return self.evaluate_result
 
     async def wheel(self, x: int, y: int) -> None:
