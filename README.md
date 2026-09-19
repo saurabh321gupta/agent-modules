@@ -19,7 +19,7 @@ L4  planners               normalizer, planner_llm, planner_jev, planner_staged
 L3  clients                llm_client, jev_client          (network transport only)
 L2  builders/browser       prompts_llm, prompts_jev, reader, overlays, executor
 L1  pure logic             files, policy, validator, verifier, extractor
-L0  leaves                 types, config, journey
+L0  leaves                 models, config, journey
 ```
 
 `tests/test_layering.py` walks the AST of every module and fails on an upward import, so the rule is
@@ -45,23 +45,65 @@ python tests/test_extractor.py             # any single module, standalone
 python -m pytest tests/test_replay.py -v   # payload regressions over recorded journeys, no network
 ```
 
+The agent, in any of its three equivalent forms:
+
 ```bash
-python -m agent_modules.cli \
+job-agent --help                # the installed console script
+python -m agent_modules --help  # the package entry point
+python -m agent_modules.cli     # the module
+```
+
+```bash
+job-agent \
   --url "https://example.com/job/123" \
   --profile profile.json \
   --defaults default.json \
   --asset resume_primary=/absolute/path/to/resume.pdf \
-  --api-key-file .env \
-  --typesafe-api-key-file .env.typesafe \
-  --field-pause 1.0 \
+  --api-key-file .env.deepseek \
+  --jev-api-key-file .env.typesafe \
+  --base-url https://api.deepseek.com \
+  --model deepseek-flash \
   --no-submit
 ```
+
+**Do not run a file inside the package by path** — `python src/agent_modules/cli.py` cannot work.
+The file becomes `__main__` with no parent package, so its relative imports fail with
+`attempted relative import with no known parent package`; and its directory is placed on `sys.path`,
+where any module sharing a standard-library name would shadow the real one. Use one of the three
+forms above. In PyCharm, set the run configuration's **Module name** to `agent_modules.cli` — not a
+script path.
+
+### Debugging a live run
+
+Every deadline in this codebase is wall-clock, and a debugger does not stop the clock, so a long
+pause at a breakpoint will trip a timeout that had nothing to do with the code being debugged:
+
+```bash
+job-agent ... \
+  --max-seconds 3600 \      # run budget, checked against the clock each step
+  --request-timeout 3600 \  # per model call, clamped to what is left of the budget
+  --hedge-after 0 \         # never race a duplicate against your breakpoints
+  --trace run-artifacts/trace.zip \   # replay afterwards with: playwright show-trace
+  --no-normalise \          # optional: send the raw page instead of normalised questions
+  --no-submit
+```
+
+`--no-normalise` is worth knowing about beyond debugging. Normalised, the planner answers canonical
+questions, one model call per form shape; raw, it answers the page itself, which costs a much larger
+payload but carries the site's own validation messages and per-field rejection flags inline. The two
+behave differently on a page that is refusing an answer, and comparing them on a live form is the
+only way to judge the trade.
+
+The same parameters belong in the PyCharm run configuration. Useful places to break: `extractor.describe`
+(what the model will be shown), `executor.execute_one` (just before the page is touched),
+`reader.capture` (the DOM the JavaScript returned), and `validator.validate_plan` (why a plan was
+refused). Conditional breakpoints such as `action.type == "upload"` are worth the setup.
 
 ## Module map
 
 | Module | Job |
 |---|---|
-| `types` | Every data model that crosses a boundary |
+| `models` | Every data model that crosses a boundary |
 | `config` | `RunConfig`, `AutomationDefaults`, shared limits |
 | `journey` | JSONL trace + readable narrative, with secret redaction |
 | `files` | Readers for the key/bank/asset files a run is configured from |

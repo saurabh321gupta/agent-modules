@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import time
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from playwright.async_api import async_playwright
@@ -31,7 +32,7 @@ from .planner_staged import StagedPlanner
 from .policy import default_consent_actions
 from .prompts_llm import FORM_SYSTEM_PROMPT
 from .reader import PageReader, snapshot_fingerprint
-from .types import ActionResult, ApplicationPlan, CandidateProfile, PageSnapshot, RunResult
+from .models import ActionResult, ApplicationPlan, CandidateProfile, PageSnapshot, RunResult
 from .validator import PlanValidationError, resolve_profile_ref, validate_plan
 from .verifier import verify_completion
 
@@ -82,6 +83,7 @@ def build_planner(
                 journey=journey,
                 system_prompt=FORM_SYSTEM_PROMPT,
             ),
+            normalise=config.normalise,
             journey=journey,
         )
     elif config.planner == "jev":
@@ -134,10 +136,12 @@ async def run_application(
         answers=len(config.answers),
         answers_path=config.answers_path,
         field_pause_s=config.field_pause_s,
+        normalise=config.normalise,
         reasoning_effort=config.reasoning_effort,
         request_timeout_s=config.request_timeout_s,
         hedge_after_s=config.hedge_after_s,
         max_run_seconds=config.max_run_seconds,
+        trace_path=config.trace_path,
         defaults=config.defaults,
         asset_ids=sorted(assets),
     )
@@ -157,6 +161,7 @@ async def run_application(
     finally:
         result.journey_log = journey.human_path
         result.journey_jsonl = journey.path
+        result.journey_timing = journey.timing_path
         journey.log("run_finished", result=result)
         journey.close()
     return result
@@ -213,11 +218,15 @@ class _ApplicationRun:
             )
             if self.config.zoom != 1.0:
                 await context.add_init_script(_zoom_script(self.config.zoom))
+            tracing = await self.start_tracing(context)
             page = await context.new_page()
             try:
                 return await self.loop(page, planner)
             finally:
-                # Teardown must never replace the real outcome with its own error.
+                # Teardown must never replace the real outcome with its own error, and the trace has
+                # to be written before the context that is recording it is closed.
+                if tracing:
+                    await self.stop_tracing(context)
                 try:
                     await context.close()
                 except Exception as exc:
@@ -226,6 +235,53 @@ class _ApplicationRun:
                     await browser.close()
                 except Exception as exc:
                     self.journey.log("teardown_error", target="browser", error=str(exc))
+
+    async def start_tracing(self, context: Any) -> bool:
+        """Begin recording a Playwright trace.
+
+        A trace is the only artefact that shows what the page actually looked like when a decision
+        was made, so it answers questions a snapshot dict and a stack frame cannot. It is opt-in
+        because it costs disk and a little speed on every action.
+        """
+        if not self.config.trace_path:
+            return False
+        try:
+            await context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        except Exception as exc:
+            self.journey.log("trace_failed", phase="start", error=str(exc), path=self.config.trace_path)
+            return False
+        self.journey.log(
+            "trace_started",
+            path=self.config.trace_path,
+            note=(
+                "Recording screenshots, DOM snapshots and every action. Replay it with "
+                "'playwright show-trace <path>'."
+            ),
+        )
+        return True
+
+    async def stop_tracing(self, context: Any) -> None:
+        path = self.config.trace_path
+        try:
+            await context.tracing.stop(path=path)
+        except Exception as exc:
+            # A run that died mid-flight is exactly when a trace is worth having, so report whether
+            # anything usable survived rather than only that the stop failed.
+            written = Path(path).stat().st_size if path and Path(path).exists() else 0
+            self.journey.log(
+                "trace_failed",
+                phase="stop",
+                error=str(exc),
+                path=path,
+                bytes_written=written,
+                note=(
+                    "A partial trace was still written and may be readable."
+                    if written
+                    else "No trace file was produced."
+                ),
+            )
+            return
+        self.journey.log("trace_written", path=path)
 
     def build_llm_client(self) -> Any:
         """Create the model client, or return the `RunResult` explaining why the run cannot start."""
@@ -324,8 +380,12 @@ class _ApplicationRun:
         started = time.perf_counter()
         timings: dict[str, float] = {}
         try:
+            # Time the settle too: waiting for a page to go idle is one of the largest single
+            # consumers of wall clock, and leaving it untimed makes it look like unattributed time.
+            settle_started = time.perf_counter()
             await self.settle(page)
             await self.fit_zoom(page)
+            timings["settle_ms"] = (time.perf_counter() - settle_started) * 1_000
 
             observe_started = time.perf_counter()
             snapshot = await self.reader.capture(page)

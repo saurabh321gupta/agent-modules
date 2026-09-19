@@ -14,13 +14,13 @@ import time
 
 import pytest
 from helpers import element, plan, profile, snapshot
-from page_fakes import FakePage, FakeReader, ScriptedPlanner
+from page_fakes import FakeContext, FakePage, FakeReader, ScriptedPlanner
 
 from agent_modules import orchestrator
 from agent_modules.config import RunConfig
 from agent_modules.journey import JourneyLogger
 from agent_modules.orchestrator import _ApplicationRun, _without_disabled_target, run_application
-from agent_modules.types import ApplicationPlan
+from agent_modules.models import ApplicationPlan
 
 APPLICANT = profile()
 EL = [element("e1", label="City"), element("e2", role="button", label="Next", input_type="submit")]
@@ -484,6 +484,79 @@ async def test_the_run_finished_event_is_always_written(tmp_path):
         if line
     ]
     assert events[-1] == "run_finished"
+
+
+# --------------------------------------------------------------------------------- playwright trace
+
+
+def traced_run(tmp_path):
+    return make_run(
+        [],
+        config=RunConfig(planner="llm", trace_path=str(tmp_path / "run.zip")),
+        tmp_path=tmp_path,
+    )
+
+
+async def test_tracing_is_off_unless_configured(tmp_path):
+    """It costs disk and a little speed on every action, so it is opt-in."""
+    run, _, _, logger = make_run([], tmp_path=tmp_path)
+    context = FakeContext()
+    assert await run.start_tracing(context) is False
+    assert context.tracing.started is False
+    logger.close()
+
+
+async def test_tracing_starts_and_writes_when_configured(tmp_path):
+    run, _, _, logger = traced_run(tmp_path)
+    context = FakeContext()
+    assert await run.start_tracing(context) is True
+    assert context.tracing.started is True
+    assert context.tracing.screenshots is True, "screenshots are the point of a trace"
+    assert context.tracing.snapshots is True
+    await run.stop_tracing(context)
+    assert context.tracing.stopped_path == str(tmp_path / "run.zip")
+    logger.close()
+
+
+async def test_the_trace_lifecycle_is_logged_with_its_path(tmp_path):
+    run, _, _, logger = traced_run(tmp_path)
+    context = FakeContext()
+    await run.start_tracing(context)
+    await run.stop_tracing(context)
+    logger.close()
+    human = (tmp_path / "j.log").read_text(encoding="utf-8")
+    assert "Playwright trace   : RECORDING" in human
+    assert "Playwright trace   : WRITTEN" in human
+    assert str(tmp_path / "run.zip") in human
+    assert "playwright show-trace" in human
+
+
+async def test_a_trace_that_cannot_start_does_not_break_the_run(tmp_path):
+    """A diagnostic must never be the reason a run fails."""
+    run, _, _, logger = traced_run(tmp_path)
+    context = FakeContext(fail_start=True)
+    assert await run.start_tracing(context) is False
+    logger.close()
+    assert "Playwright trace   : FAILED" in (tmp_path / "j.log").read_text(encoding="utf-8")
+
+
+async def test_a_trace_that_cannot_be_written_does_not_break_the_run(tmp_path):
+    run, _, _, logger = traced_run(tmp_path)
+    context = FakeContext(fail_stop=True)
+    await run.start_tracing(context)
+    await run.stop_tracing(context)
+    logger.close()
+    human = (tmp_path / "j.log").read_text(encoding="utf-8")
+    assert "Playwright trace   : FAILED" in human
+    assert "could not write the trace" in human
+
+
+async def test_run_started_records_the_trace_path(tmp_path):
+    """So a run's own artefacts say whether a trace exists and where it went."""
+    run, _, _, logger = traced_run(tmp_path)
+    logger.log("run_started", url="u", trace_path=run.config.trace_path)
+    logger.close()
+    assert str(tmp_path / "run.zip") in (tmp_path / "j.log").read_text(encoding="utf-8")
 
 
 # ----------------------------------------------------------------------------- consent defaults

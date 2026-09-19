@@ -63,6 +63,16 @@ def test_field_pause_is_kept():
     assert RunConfig().field_pause_s == 0.0
 
 
+def test_tracing_is_off_by_default():
+    assert RunConfig().trace_path is None
+    assert RunConfig(trace_path="/tmp/t.zip").trace_path == "/tmp/t.zip"
+
+
+def test_normalisation_is_on_by_default():
+    assert RunConfig().normalise is True
+    assert RunConfig(normalise=False).normalise is False
+
+
 def test_answers_default_is_not_shared():
     first = RunConfig()
     second = RunConfig()

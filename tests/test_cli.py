@@ -139,6 +139,58 @@ def test_the_journey_log_path_is_carried():
     assert config.journey_log_path == "/tmp/j.jsonl"
 
 
+# ---------------------------------------------------------------- debugging and diagnostics knobs
+
+
+def test_request_timeout_maps_through():
+    """The per-call bound is wall-clock, so a debugger holding a coroutine open needs this raised."""
+    assert cli.config_from_args(parse(*BASE, "--request-timeout", "600")).request_timeout_s == 600.0
+
+
+def test_request_timeout_defaults_to_sixty_seconds():
+    assert cli.config_from_args(parse(*BASE)).request_timeout_s == 60.0
+
+
+def test_hedge_after_maps_through():
+    assert cli.config_from_args(parse(*BASE, "--hedge-after", "5")).hedge_after_s == 5.0
+
+
+def test_hedge_can_be_disabled_from_the_command_line():
+    """0 means never race a duplicate, which is what you want under a debugger."""
+    assert cli.config_from_args(parse(*BASE, "--hedge-after", "0")).hedge_after_s == 0.0
+
+
+def test_hedge_after_defaults_to_thirty_seconds():
+    assert cli.config_from_args(parse(*BASE)).hedge_after_s == 30.0
+
+
+def test_trace_maps_through():
+    config = cli.config_from_args(parse(*BASE, "--trace", "/tmp/run.zip"))
+    assert config.trace_path == "/tmp/run.zip"
+
+
+def test_tracing_is_off_unless_asked_for():
+    assert cli.config_from_args(parse(*BASE)).trace_path is None
+
+
+def test_normalisation_is_on_by_default():
+    assert cli.config_from_args(parse(*BASE)).normalise is True
+
+
+def test_normalisation_can_be_switched_off_from_the_command_line():
+    """Used to compare the two payloads on a live page."""
+    assert cli.config_from_args(parse(*BASE, "--no-normalise")).normalise is False
+    assert cli.config_from_args(parse(*BASE, "--normalise")).normalise is True
+
+
+def test_the_debugging_flags_are_documented_in_help():
+    help_text = cli.build_parser().format_help()
+    assert "--request-timeout" in help_text
+    assert "--hedge-after" in help_text
+    assert "--trace" in help_text
+    assert "debugger" in help_text
+
+
 def test_help_text_documents_the_staged_default():
     """The planner help is where a reader learns which path is the default."""
     help_text = cli.build_parser().format_help()

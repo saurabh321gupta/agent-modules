@@ -127,6 +127,7 @@ class RunResult(BaseModel):
     action_results: list[ActionResult]
     journey_log: str | None = None
     journey_jsonl: str | None = None
+    journey_timing: str | None = None
 
 
 class NormalisedField(BaseModel):

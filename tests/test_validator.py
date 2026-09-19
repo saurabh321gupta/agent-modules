@@ -61,6 +61,31 @@ def test_resolve_profile_ref_rejects_containers(sample_profile):
         resolve_profile_ref(sample_profile, "identity")
 
 
+def test_an_answer_bank_reference_is_rejected_and_says_what_to_do(sample_profile):
+    """The answer bank is a separate namespace that nothing resolves references against.
+
+    The message matters as much as the rejection: it is fed back to the planner inside
+    recent_history, so it has to point at the fix rather than read like a typo in a profile path.
+    """
+    with pytest.raises(PlanValidationError, match="answer bank is not referenceable"):
+        resolve_profile_ref(sample_profile, "answers.Current notice period")
+
+
+def test_an_answer_bank_reference_is_rejected_at_plan_validation(sample_profile):
+    """The same rule, reached the way the runner reaches it."""
+    with pytest.raises(PlanValidationError, match="literal value"):
+        validate_plan(
+            plan(
+                "s-1-abc12345",
+                [action("fill", "e1", value_ref="answers.Current notice period")],
+            ),
+            snapshot([element("e1", label="Notice period")]),
+            sample_profile,
+            {},
+            True,
+        )
+
+
 # ------------------------------------------------------------------------------- batch limits
 
 

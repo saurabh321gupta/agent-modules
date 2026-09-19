@@ -12,6 +12,7 @@ from agent_modules.prompts_llm import (
     FORM_SYSTEM_PROMPT,
     MAIN_SYSTEM_PROMPT,
     MAX_OPTIONS_SENT,
+    REJECTION_RULE,
     UPLOAD_RULE,
     profile_for_llm,
     response_format_for,
@@ -32,6 +33,49 @@ def test_both_prompts_state_the_upload_rule():
     assert UPLOAD_RULE in FORM_SYSTEM_PROMPT
     assert "upload action" in UPLOAD_RULE
     assert "asset_id" in UPLOAD_RULE
+
+
+def test_both_prompts_warn_against_repeating_a_rejected_value():
+    """Telling the model about an error is not enough if it has no instruction for what to do.
+
+    The failure this prevents: the site refuses a value, the model sees it, and proposes the same
+    value again because nothing told it that the format was the problem.
+    """
+    assert REJECTION_RULE in MAIN_SYSTEM_PROMPT
+    assert REJECTION_RULE in FORM_SYSTEM_PROMPT
+    assert "rejected" in REJECTION_RULE
+    assert "validation_errors" in REJECTION_RULE
+    assert "without one" in REJECTION_RULE, "the phone-number case is named explicitly"
+
+
+def flat(prompt: str) -> str:
+    """Collapse whitespace so an assertion does not depend on where the prompt happens to wrap."""
+    return " ".join(prompt.split())
+
+
+def test_the_prompts_do_not_promise_a_reference_the_code_refuses():
+    """The form prompt used to say "or an answers.* path", and nothing resolves that.
+
+    A prompt naming a mechanism the validator rejects is worse than a vague one: the rejection reads
+    like a typo in a profile path, so the model retries another path that cannot work either.
+    """
+    assert "answers.*" not in FORM_SYSTEM_PROMPT
+    assert "answers.*" not in MAIN_SYSTEM_PROMPT
+
+
+def test_the_form_prompt_says_the_bank_must_be_sent_as_a_literal():
+    """Removing the false claim is only half the fix; the model needs the replacement rule."""
+    text = flat(FORM_SYSTEM_PROMPT)
+    assert "value_ref works only for the candidate profile" in text
+    assert "there is no reference form for user_provided_answers" in text
+    assert "must be sent as a literal value" in text
+
+
+def test_the_form_prompt_warns_that_a_profile_path_cannot_be_reformatted():
+    """The trap that caused the phone loop: a path reproduces the profile's own formatting."""
+    text = flat(FORM_SYSTEM_PROMPT)
+    assert "Prefer a literal when the field constrains its format" in text
+    assert "cannot be reformatted for the field" in text
 
 
 def test_form_prompt_keeps_its_other_rules():

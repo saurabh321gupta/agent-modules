@@ -1,4 +1,4 @@
-"""Tests for `agent_modules.types` — the contracts every other module depends on."""
+"""Tests for `agent_modules.models` — the contracts every other module depends on."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pytest
 from helpers import action, element, profile, snapshot
 from pydantic import ValidationError
 
-from agent_modules.types import (
+from agent_modules.models import (
     Action,
     ApplicationPlan,
     CandidateProfile,

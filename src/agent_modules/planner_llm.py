@@ -16,7 +16,7 @@ from .config import AutomationDefaults
 from .journey import JourneyLogger
 from .llm_client import ModelClient
 from .prompts_llm import MAIN_SYSTEM_PROMPT, profile_for_llm, snapshot_for_llm, with_schema
-from .types import ApplicationPlan, CandidateProfile, NormalisedForm, PageSnapshot
+from .models import ApplicationPlan, CandidateProfile, NormalisedForm, PageSnapshot
 
 
 class LLMPlanner:
@@ -62,8 +62,14 @@ class LLMPlanner:
         if form is None:
             base["current_page"] = snapshot_for_llm(snapshot, self.include_all_options)
             return base
-        values = {element.id: element.value for element in snapshot.elements}
+        # The normalised form is cached by *shape*, so its questions are reusable but its state is
+        # not. Anything that changes between steps - the value in a field, whether the site has
+        # rejected it, the page's own validation messages - has to be read from the live snapshot.
+        # Taking them from the cached form instead is how a rejected phone number was re-sent
+        # unchanged, step after step, while the page refused to advance.
+        live = {element.id: element for element in snapshot.elements}
         base["snapshot_id"] = snapshot.snapshot_id
+        base["validation_errors"] = snapshot.validation_errors
         base["form"] = {
             "page_kind": form.page_kind,
             "questions": [
@@ -76,7 +82,9 @@ class LLMPlanner:
                     # Complete, from the page: a dropdown's option_value is often a code that only
                     # the page knows.
                     "options": [{"value": o.value, "label": o.label} for o in field.options],
-                    "current_value": values.get(field.id),
+                    "current_value": live[field.id].value if field.id in live else None,
+                    # True when the site has flagged this control as holding a bad value.
+                    "rejected": live[field.id].invalid if field.id in live else False,
                 }
                 for field in form.fields
             ],

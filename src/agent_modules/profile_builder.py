@@ -20,7 +20,7 @@ from typing import Any
 from .config import DEFAULT_BASE_URL, DEFAULT_MODEL
 from .files import read_api_key
 from .llm_client import DeepSeekClient
-from .types import CandidateProfile
+from .models import CandidateProfile
 
 SYSTEM_PROMPT = """
 You extract a structured candidate profile from a resume.

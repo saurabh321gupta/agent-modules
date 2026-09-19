@@ -11,7 +11,7 @@ from helpers import element, profile, snapshot
 from agent_modules.config import AutomationDefaults
 from agent_modules.journey import JourneyLogger
 from agent_modules.planner_llm import LLMPlanner
-from agent_modules.types import NormalisedField, NormalisedForm
+from agent_modules.models import NormalisedField, NormalisedForm
 
 APPLICANT = profile()
 ASSETS = {"resume_primary": "/tmp/resume.pdf"}
@@ -129,6 +129,93 @@ async def test_current_values_are_looked_up_from_the_live_snapshot():
     await planner.next_step(APPLICANT, snapshot([element("e1", label="City", value="Mumbai")]), [], form=form)
     sent = json.loads(client.calls[0]["messages"][1]["content"])
     assert sent["form"]["questions"][0]["current_value"] == "Mumbai"
+
+
+def one_question_form() -> NormalisedForm:
+    return NormalisedForm(
+        page_kind="form",
+        fields=[
+            NormalisedField(id="e1", question="Phone number", field_type="text", required=True)
+        ],
+        submit_controls=[],
+    )
+
+
+def test_the_sites_validation_errors_reach_the_answering_model():
+    """Regression, found on a live page.
+
+    The site refused a phone number for containing a hyphen. The model was never told, so it proposed
+    the same number on the next step, the same rejection followed, and the page stayed stuck for as
+    long as the run lasted.
+    """
+    planner = LLMPlanner(FakeModelClient("{}"), "model")
+    snap = snapshot(
+        [element("e1", label="Phone Number", value="91-0000000000", invalid=True)],
+        validation_errors=["Phone Number is not in a valid format"],
+    )
+    payload = planner.payload(APPLICANT, snap, [], form=one_question_form())
+    assert payload["validation_errors"] == ["Phone Number is not in a valid format"]
+
+
+def test_a_rejected_control_is_flagged_in_the_payload():
+    planner = LLMPlanner(FakeModelClient("{}"), "model")
+    snap = snapshot(
+        [
+            element("e1", label="Phone Number", value="91-0000000000", invalid=True),
+            element("e2", label="City", value="Bangalore", invalid=False),
+        ]
+    )
+    form = NormalisedForm(
+        page_kind="form",
+        fields=[
+            NormalisedField(id="e1", question="Phone", field_type="text", required=True),
+            NormalisedField(id="e2", question="City", field_type="text", required=False),
+        ],
+        submit_controls=[],
+    )
+    questions = planner.payload(APPLICANT, snap, [], form=form)["form"]["questions"]
+    assert questions[0]["rejected"] is True
+    assert questions[1]["rejected"] is False
+
+
+def test_a_form_served_from_cache_still_carries_the_current_rejection():
+    """The questions are cached by shape; the state must never be.
+
+    A cached form describing the same field the same way must still report that *this* observation
+    holds a value the site refuses.
+    """
+    planner = LLMPlanner(FakeModelClient("{}"), "model")
+    cached = one_question_form()
+    cached.cached = True
+    snap = snapshot(
+        [element("e1", label="Phone Number", value="91-0000000000", invalid=True)],
+        validation_errors=["Phone Number is not in a valid format"],
+    )
+    payload = planner.payload(APPLICANT, snap, [], form=cached)
+    assert payload["validation_errors"] == ["Phone Number is not in a valid format"]
+    assert payload["form"]["questions"][0]["rejected"] is True
+
+
+def test_a_clean_page_reports_no_rejections():
+    """Empty must not be confused with absent: an empty list means the site is content."""
+    planner = LLMPlanner(FakeModelClient("{}"), "model")
+    snap = snapshot([element("e1", label="Phone Number", value="0000000000")])
+    payload = planner.payload(APPLICANT, snap, [], form=one_question_form())
+    assert payload["validation_errors"] == []
+    assert payload["form"]["questions"][0]["rejected"] is False
+
+
+def test_the_raw_path_carries_the_errors_inline_with_the_page():
+    """Without a form the whole snapshot is sent, so the errors ride along inside it."""
+    planner = LLMPlanner(FakeModelClient("{}"), "model")
+    snap = snapshot(
+        [element("e1", label="Phone Number", value="91-0000000000", invalid=True)],
+        validation_errors=["Phone Number is not in a valid format"],
+    )
+    payload = planner.payload(APPLICANT, snap, [])
+    assert payload["current_page"]["validation_errors"] == [
+        "Phone Number is not in a valid format"
+    ]
 
 
 async def test_include_all_options_reaches_the_payload():

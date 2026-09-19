@@ -57,12 +57,18 @@ class RunConfig:
     answers: dict[str, str] = field(default_factory=dict)
     answers_path: str | None = None
     planner: str = "staged"
+    #: When off, form pages go to the planner as a raw snapshot instead of normalised questions.
+    #: Kept as a switch because it is the difference between two very different payloads, and
+    #: comparing them on a live page is the only way to judge the normaliser.
+    normalise: bool = True
     jev_api_key: str | None = None
     jev_model: str = DEFAULT_JEV_MODEL
     jev_confidence_floor: float = 0.35
     defaults: AutomationDefaults = field(default_factory=AutomationDefaults)
     journey_log_path: str | None = None
     field_pause_s: float = 0.0
+    #: When set, a Playwright trace is recorded here for replay with `playwright show-trace`.
+    trace_path: str | None = None
 
     # Hardening, ported from the speed/robustness line of work.
     reasoning_effort: str | None = "low"

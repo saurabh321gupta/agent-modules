@@ -14,7 +14,7 @@ from typing import Any
 
 from playwright.async_api import Page
 
-from .types import Option, PageElement, PageSnapshot
+from .models import Option, PageElement, PageSnapshot
 
 #: An accessibility snapshot line reads `- role "Accessible Name": value`. The name is optional,
 #: and quotes and backslashes inside it are escaped.

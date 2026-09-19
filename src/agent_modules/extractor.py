@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Literal
 
-from .types import PageElement, PageSnapshot
+from .models import PageElement, PageSnapshot
 
 FieldType = Literal[
     "text", "long_text", "email", "phone", "number", "date",

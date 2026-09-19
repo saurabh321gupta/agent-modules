@@ -15,9 +15,10 @@ PACKAGE = Path(__file__).resolve().parents[1] / "src" / "agent_modules"
 #: point: the layer is a design decision, not an accident.
 LAYERS: dict[str, int] = {
     # L0 - leaves
-    "types": 0,
+    "models": 0,
     "config": 0,
     "journey": 0,
+    "timing": 0,
     # L1 - pure logic over L0
     "files": 1,
     "policy": 1,
@@ -42,6 +43,7 @@ LAYERS: dict[str, int] = {
     "orchestrator": 5,
     # L6 - entry points
     "cli": 6,
+    "__main__": 6,
     "profile_builder": 6,
 }
 
@@ -95,6 +97,21 @@ def test_layers_are_not_skipped_by_the_map_itself():
     """A layer with no modules is dead weight and a sign the map has drifted from the code."""
     numbers = sorted(set(LAYERS.values()))
     assert numbers == list(range(len(numbers))), f"layer numbering has a gap: {numbers}"
+
+
+def test_no_module_shadows_a_standard_library_module():
+    """A module named `types` broke `functools`, and the error pointed at the stdlib, not at us.
+
+    Running a file inside a package by path puts that directory first on `sys.path`, at which point a
+    module sharing a standard-library name is imported instead of the real one. Nothing about the
+    failure names the culprit, so the name is what has to change.
+    """
+    import sys
+
+    clashes = sorted(
+        path.stem for path in module_paths() if path.stem in sys.stdlib_module_names
+    )
+    assert not clashes, f"these module names shadow the standard library: {clashes}"
 
 
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path

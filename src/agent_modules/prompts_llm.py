@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 from .config import AutomationDefaults
-from .types import ApplicationPlan, CandidateProfile, PageSnapshot
+from .models import ApplicationPlan, CandidateProfile, PageSnapshot
 
 #: A dropdown carries at most this many options before the list is windowed.
 MAX_OPTIONS_SENT = 1000
@@ -23,6 +23,16 @@ UPLOAD_RULE = (
     "of the matching document from candidate_profile.documents. Never skip a file field and never "
     "treat it as a button: a required upload left unattended blocks the form from advancing, and the "
     "page's own validation message often never appears in the snapshot."
+)
+
+REJECTION_RULE = (
+    '- A control the site has rejected is marked "rejected": true, and the site\'s own message '
+    "appears in validation_errors. Never send a rejected value back unchanged: its format is the "
+    "problem, not its content. A phone number refused for containing a hyphen must come back without "
+    "one; a date refused in one layout must come back in the layout the site asked for. Repeating a "
+    "value the site has just refused leaves the page stuck forever, because the same rejection "
+    "follows every time. If no faithful value satisfies the required format, name the field in "
+    "needs_input rather than resending it."
 )
 
 MAIN_SYSTEM_PROMPT = """
@@ -101,7 +111,7 @@ the supplied text. Match on meaning rather than exact wording: "How did you hear
 "How did you hear about this job?". Copy the answer verbatim; do not reword, round, reformat, or
 shorten it. When a field is covered by neither the profile nor this bank, use the low-stakes rules
 above and stop only when the missing answer is materially significant.
-""".strip() + "\n" + UPLOAD_RULE
+""".strip() + "\n" + UPLOAD_RULE + "\n" + REJECTION_RULE
 
 
 FORM_SYSTEM_PROMPT = """You are the answering component of a job-application assistant.
@@ -115,8 +125,14 @@ options for a dropdown.
 Rules:
 - Answer only from the candidate profile or the approved answers. A missing fact is unknown: never
   invent one, and never turn it into a negative answer.
-- For a text question, use value_ref with the dotted path of the fact (for example identity.first_name)
-  or an answers.* path. Use value only when the exact answer is stated there.
+- For a text question, either copy the answer as a literal value, or name a profile fact with
+  value_ref using its dotted path (for example identity.first_name). value_ref works only for the
+  candidate profile: there is no reference form for user_provided_answers, so an answer from that
+  bank must be sent as a literal value. Prefer a literal when the field constrains its format - a
+  phone number, a date, an amount - because a profile path reproduces the profile's own formatting
+  and cannot be reformatted for the field.
+- Copy a literal value exactly as it appears in the profile or the approved answers. Do not reword,
+  round, reformat or shorten it.
 - For a select, radio or checkbox question, option_value must be copied exactly from that question's
   options. Match on meaning: "Computer Science" should pick "Computer and Information Science" if
   that is the closest option offered.
@@ -129,11 +145,12 @@ Rules:
 - Skip anything that is not a question for the candidate: field_type button or unknown, navigation,
   job-alert signup boxes, search boxes.
 %s
+%s
 - Never complete the application while a required question is unanswered. When a required question
   cannot be grounded in the profile or the approved answers, return needs_input naming it.
 - Click a submit control only once every required question is answered.
 - Return complete only with visible evidence that the application was received.
-""" % UPLOAD_RULE
+""" % (UPLOAD_RULE, REJECTION_RULE)
 
 
 def with_schema(system_prompt: str, mode: str) -> str:

@@ -131,7 +131,7 @@ def test_form_signature_is_stable_across_processes():
     snapshot_json = snapshot([element("e1", label="City")]).model_dump_json()
     code = (
         "import sys; sys.path.insert(0, 'src');"
-        "from agent_modules.types import PageSnapshot;"
+        "from agent_modules.models import PageSnapshot;"
         "from agent_modules.extractor import form_signature;"
         f"s = PageSnapshot.model_validate_json({snapshot_json!r});"
         "print(form_signature(s))"

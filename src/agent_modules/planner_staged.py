@@ -19,7 +19,7 @@ from .journey import JourneyLogger
 from .normalizer import Normalizer
 from .planner_llm import LLMPlanner
 from .prompts_jev import APPLY_MARKERS, classify_controls, classify_questions, classify_state
-from .types import Action, ApplicationPlan, CandidateProfile, CompletionEvidence, PageSnapshot
+from .models import Action, ApplicationPlan, CandidateProfile, CompletionEvidence, PageSnapshot
 
 PageClass = Literal[
     "job_listing",
@@ -57,11 +57,14 @@ class StagedPlanner:
         classifier: Any,
         normalizer: Normalizer,
         planner: LLMPlanner,
+        normalise: bool = True,
         journey: JourneyLogger | None = None,
     ) -> None:
         self.classifier = classifier
         self.normalizer = normalizer
         self.planner = planner
+        #: Off sends the raw snapshot to the planner instead of normalised questions.
+        self.normalise = normalise
         self.journey = journey
         self.last_step: dict[str, Any] = {}
 
@@ -225,8 +228,12 @@ class StagedPlanner:
         history: list[dict[str, Any]],
         decision: PageDecision,
     ) -> ApplicationPlan:
-        """The only expensive branch: normalise the form, then answer it."""
-        form = await self.normalizer.normalise(snapshot)
+        """The only expensive branch.
+
+        Normalised, the model answers canonical questions; raw, it answers the page itself, which
+        carries the site's validation errors inline but costs a much larger payload.
+        """
+        form = await self.normalizer.normalise(snapshot) if self.normalise else None
         plan = await self.planner.next_step(profile, snapshot, history, form=form)
         self.last_step = {
             "class": decision.page_class,

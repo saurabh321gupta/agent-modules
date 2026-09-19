@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .timing import render_timing
+
 SECRET_PATTERN = re.compile(r"(?i)(?:sk-[A-Za-z0-9_-]{10,}|bearer\s+[A-Za-z0-9._~+/=-]+)")
 SECRET_KEYS = {
     "api_key",
@@ -222,6 +224,24 @@ class JourneyRenderer:
                 f"Budget             : {data.get('max_run_seconds', '')}s",
                 f"Elapsed            : {data.get('elapsed_s', '')}s",
             ]
+        if event == "trace_started":
+            return [
+                "Playwright trace   : RECORDING",
+                f"Path               : {data.get('path', '')}",
+                str(data.get("note", "")),
+            ]
+        if event == "trace_written":
+            return [
+                "Playwright trace   : WRITTEN",
+                f"Path               : {data.get('path', '')}",
+                "Replay it with 'playwright show-trace <path>'.",
+            ]
+        if event == "trace_failed":
+            return [
+                "Playwright trace   : FAILED",
+                f"Phase              : {data.get('phase', '')}",
+                f"Error              : {data.get('error', '')}",
+            ]
         return self._indented(data, 0)
 
     # -------------------------------------------------------------------- sections
@@ -242,10 +262,13 @@ class JourneyRenderer:
             f"Answer bank       : {data.get('answers', 0)} answers ({data.get('answers_path') or 'none'})",
             # Without this, a run's artefacts cannot confirm whether the pause was applied at all.
             f"Field pause       : {data.get('field_pause_s', 0.0)}s after typing",
+            f"Form payload      : "
+            f"{'normalised questions' if data.get('normalise', True) else 'raw snapshot (normalisation off)'}",
             f"Reasoning effort  : {data.get('reasoning_effort') or 'provider default'}",
             f"Call timeout      : {data.get('request_timeout_s', '')}s "
             f"(hedged after {data.get('hedge_after_s', '')}s)",
             f"Run budget        : {data.get('max_run_seconds', '')}s",
+            f"Playwright trace  : {data.get('trace_path') or 'off'}",
             "Defaults:",
         ]
         lines.extend(self._indented(data.get("defaults"), 2))
@@ -277,6 +300,7 @@ class JourneyRenderer:
             f"cached={self._usage['cached_tokens']} reasoning={self._usage['reasoning_tokens']}",
             f"Readable log      : {result.get('journey_log') or self.human_path}",
             f"Detailed JSONL    : {result.get('journey_jsonl') or self.path}",
+            f"Timings           : {result.get('journey_timing') or ''}",
         ]
 
     def _plan(self, data: dict[str, Any], *, validated: bool) -> list[str]:
@@ -527,6 +551,9 @@ class JourneyLogger:
             stem = Path("run-artifacts") / f"journey-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{run_id}"
             self.path = str(stem.with_suffix(".jsonl"))
             self.human_path = str(stem.with_suffix(".log"))
+        # The timings sit beside the other two artefacts and are derived from the JSONL at close,
+        # so they always agree with the trace.
+        self.timing_path = str(Path(self.path).with_suffix("")) + ".timing.log"
 
         jsonl_path = Path(self.path)
         human_path = Path(self.human_path)
@@ -566,10 +593,31 @@ class JourneyLogger:
         self._human_handle.flush()
 
     def close(self) -> None:
+        # Render the timings from the JSONL before closing it: the file is the single source of
+        # truth for every artefact, and reading it back keeps the report impossible to drift.
+        try:
+            self.write_timing_report()
+        except Exception:
+            # A report that cannot be produced must never be the reason a run's trace is lost.
+            pass
         if not self._handle.closed:
             self._handle.close()
         if not self._human_handle.closed:
             self._human_handle.close()
+
+    def write_timing_report(self) -> str:
+        """Write the timings-only report beside the trace, and return its path."""
+        self._handle.flush()
+        records = [
+            json.loads(line)
+            for line in Path(self.path).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        destination = Path(self.timing_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(render_timing(records), encoding="utf-8")
+        os.chmod(destination, 0o600)
+        return self.timing_path
 
     def _sanitize(self, value: Any, key: str | None = None) -> Any:
         if isinstance(value, dict):

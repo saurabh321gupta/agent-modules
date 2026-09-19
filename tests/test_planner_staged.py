@@ -49,12 +49,23 @@ PLAN_REPLY = json.dumps(
 )
 
 
-def make(answers, *, form_reply=FORM_REPLY, plan_reply=PLAN_REPLY, raises=None, journey=None):
+def make(
+    answers,
+    *,
+    form_reply=FORM_REPLY,
+    plan_reply=PLAN_REPLY,
+    raises=None,
+    journey=None,
+    normalise=True,
+):
     classifier = FakeClassifier(answers, raises=raises)
-    model = FakeModelClient([form_reply, plan_reply])
+    # Without normalisation the normaliser is never called, so only the plan reply is queued.
+    model = FakeModelClient([plan_reply] if not normalise else [form_reply, plan_reply])
     normalizer = Normalizer(model, "model", journey=journey)
     planner = LLMPlanner(model, "model", defaults=AutomationDefaults(), journey=journey)
-    staged = StagedPlanner(classifier, normalizer, planner, journey=journey)
+    staged = StagedPlanner(
+        classifier, normalizer, planner, normalise=normalise, journey=journey
+    )
     return classifier, model, staged
 
 
@@ -171,6 +182,39 @@ async def test_the_answering_call_receives_the_normalised_questions():
     sent = json.loads(model.calls[1]["messages"][1]["content"])
     assert sent["form"]["questions"][0]["question"] == "Which city?"
     assert "current_page" not in sent
+
+
+# ------------------------------------------------------------------------------- the bypass switch
+
+
+async def test_normalisation_is_on_by_default():
+    _, model, staged = make(classification("application_form", 0.95))
+    await staged.next_step(APPLICANT, FORM_PAGE, [])
+    assert [call["kind"] for call in model.calls] == ["complete", "complete_json"]
+
+
+async def test_the_bypass_sends_the_raw_snapshot_instead():
+    """Off, the normaliser is never called and the page goes to the planner as it is."""
+    _, model, staged = make(classification("application_form", 0.95), normalise=False)
+    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    assert plan.status == "continue"
+    assert [call["kind"] for call in model.calls] == ["complete_json"], "no normaliser call"
+    sent = json.loads(model.calls[0]["messages"][1]["content"])
+    assert "current_page" in sent
+    assert "form" not in sent
+
+
+async def test_the_bypass_carries_the_sites_validation_errors_inline():
+    """Which is the reason to reach for it: the raw snapshot includes them, per element and per page."""
+    snap = snapshot(
+        [element("e1", label="City", required=True, invalid=True, value="91-0000000000")],
+        validation_errors=["City is not in a valid format"],
+    )
+    _, model, staged = make(classification("application_form", 0.95), normalise=False)
+    await staged.next_step(APPLICANT, snap, [])
+    page = json.loads(model.calls[0]["messages"][1]["content"])["current_page"]
+    assert page["validation_errors"] == ["City is not in a valid format"]
+    assert page["elements"][0]["invalid"] is True
 
 
 async def test_a_low_confidence_verdict_falls_through_to_the_form_path():

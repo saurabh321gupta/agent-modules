@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from .config import MAX_CHOICES
-from .types import CandidateProfile, PageElement, PageSnapshot
+from .models import CandidateProfile, PageElement, PageSnapshot
 
 #: How many answer-bank entries are offered for one field. Every profile fact is offered; the longer
 #: answer bank is shortlisted, or the criteria map would be enormous.

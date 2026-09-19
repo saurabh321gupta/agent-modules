@@ -25,7 +25,7 @@ from agent_modules.config import MAX_CHOICES, AutomationDefaults
 from agent_modules.normalizer import Normalizer
 from agent_modules.prompts_jev import build_field_questions
 from agent_modules.prompts_llm import profile_for_llm, snapshot_for_llm
-from agent_modules.types import PageSnapshot
+from agent_modules.models import PageSnapshot
 
 FIXTURES = Path(__file__).parent / "fixtures" / "journeys"
 

@@ -20,7 +20,7 @@ if str(TESTS_DIR) not in sys.path:
 
 from helpers import profile  # noqa: E402
 
-from agent_modules.types import CandidateProfile  # noqa: E402
+from agent_modules.models import CandidateProfile  # noqa: E402
 
 
 @pytest.fixture(scope="session")

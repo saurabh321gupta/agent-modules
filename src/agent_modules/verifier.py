@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .types import CompletionEvidence, PageSnapshot
+from .models import CompletionEvidence, PageSnapshot
 
 SUCCESS_PATTERNS = (
     r"application\s+(?:has been|was|is)\s+submitted",

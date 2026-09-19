@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_modules.types import (
+from agent_modules.models import (
     Action,
     ApplicationPlan,
     CandidateProfile,

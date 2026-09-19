@@ -29,7 +29,7 @@ from .prompts_jev import (
     profile_facts,
 )
 from .prompts_llm import profile_for_llm
-from .types import Action, ApplicationPlan, CandidateProfile, PageElement, PageSnapshot
+from .models import Action, ApplicationPlan, CandidateProfile, PageElement, PageSnapshot
 
 
 class LlmFieldAssist:

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import MAX_ACTIONS
-from .types import Action, ApplicationPlan, CandidateProfile, PageElement, PageSnapshot
+from .models import Action, ApplicationPlan, CandidateProfile, PageElement, PageSnapshot
 
 SUBMIT_MARKERS = (
     "submit application",
@@ -27,6 +27,15 @@ class PlanValidationError(ValueError):
 
 def resolve_profile_ref(profile: CandidateProfile, ref: str) -> Any:
     """Resolve a dotted profile path to a scalar. Unknown or empty values are an error, not None."""
+    if ref.startswith("answers."):
+        # The approved answer bank is a separate namespace that nothing resolves references against.
+        # Saying so beats reporting an unknown profile path: this message is fed back to the planner
+        # inside recent_history, so the model corrects itself next step instead of trying another
+        # profile path that cannot exist either.
+        raise PlanValidationError(
+            "value_ref cannot name an approved answer: the answer bank is not referenceable, so "
+            f"send that answer as a literal value instead of {ref!r}"
+        )
     current: Any = profile.model_dump(mode="python")
     for part in ref.split("."):
         if not part or not isinstance(current, dict) or part not in current:

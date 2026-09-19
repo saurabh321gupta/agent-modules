@@ -18,7 +18,7 @@ from typing import Any
 from .extractor import describe, field_type_for, form_signature, is_capturable, page_kind_of
 from .journey import JourneyLogger
 from .llm_client import ModelClient
-from .types import NormalisedField, NormalisedForm, PageSnapshot
+from .models import NormalisedField, NormalisedForm, PageSnapshot
 
 SYSTEM_PROMPT = """You read a web form and say, for each control, exactly what it is asking the applicant.
 

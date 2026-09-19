@@ -16,7 +16,7 @@ import os
 from playwright.async_api import Locator, Page
 
 from .journey import JourneyLogger
-from .types import Action, ActionResult, CandidateProfile, PageSnapshot
+from .models import Action, ActionResult, CandidateProfile, PageSnapshot
 from .validator import resolve_profile_ref
 
 

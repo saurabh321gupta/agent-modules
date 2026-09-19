@@ -7,7 +7,7 @@ about the candidate is left to the planner and, if it cannot be grounded, to `ne
 from __future__ import annotations
 
 from .config import AutomationDefaults
-from .types import Action, PageElement, PageSnapshot
+from .models import Action, PageElement, PageSnapshot
 
 CONSENT_MARKERS = (
     "consent",

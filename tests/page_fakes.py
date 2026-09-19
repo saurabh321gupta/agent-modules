@@ -135,6 +135,37 @@ class FakePage:
         return None
 
 
+class FakeTracing:
+    """Stands in for Playwright's tracing API on a browser context."""
+
+    def __init__(self, *, fail_start: bool = False, fail_stop: bool = False) -> None:
+        self.fail_start = fail_start
+        self.fail_stop = fail_stop
+        self.started = False
+        self.stopped_path: str | None = None
+        self.screenshots: bool | None = None
+        self.snapshots: bool | None = None
+
+    async def start(self, screenshots=None, snapshots=None, sources=None) -> None:
+        if self.fail_start:
+            raise RuntimeError("tracing is unavailable here")
+        self.started = True
+        self.screenshots = screenshots
+        self.snapshots = snapshots
+
+    async def stop(self, path: str | None = None) -> None:
+        if self.fail_stop:
+            raise RuntimeError("could not write the trace")
+        self.stopped_path = path
+
+
+class FakeContext:
+    """Just the surface the orchestrator touches on a browser context."""
+
+    def __init__(self, **tracing_kwargs: Any) -> None:
+        self.tracing = FakeTracing(**tracing_kwargs)
+
+
 class FakeReader:
     """Returns scripted snapshots in order, repeating the last one once exhausted."""
 

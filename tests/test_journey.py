@@ -192,6 +192,108 @@ def test_unknown_events_fall_back_to_raw_json(tmp_path):
     assert '"alpha": 1' in (tmp_path / "j.log").read_text(encoding="utf-8")
 
 
+def test_run_started_reports_whether_a_trace_is_being_recorded(tmp_path):
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("run_started", url="u", trace_path="/tmp/run.zip")
+    logger.log("run_started", url="u")
+    logger.close()
+    human = (tmp_path / "j.log").read_text(encoding="utf-8")
+    assert "Playwright trace  : /tmp/run.zip" in human
+    assert "Playwright trace  : off" in human
+
+
+def test_run_started_reports_which_form_payload_is_in_use(tmp_path):
+    """The two payloads behave differently, so the trace has to say which one ran."""
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("run_started", url="u", normalise=True)
+    logger.log("run_started", url="u", normalise=False)
+    logger.close()
+    human = (tmp_path / "j.log").read_text(encoding="utf-8")
+    assert "Form payload      : normalised questions" in human
+    assert "Form payload      : raw snapshot (normalisation off)" in human
+
+
+def test_trace_events_have_readable_sections(tmp_path):
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("trace_started", path="/tmp/run.zip", note="recording everything")
+    logger.log("trace_written", path="/tmp/run.zip")
+    logger.log("trace_failed", phase="stop", error="disk full")
+    logger.close()
+    human = (tmp_path / "j.log").read_text(encoding="utf-8")
+    assert "Playwright trace   : RECORDING" in human
+    assert "Playwright trace   : WRITTEN" in human
+    assert "playwright show-trace" in human
+    assert "Playwright trace   : FAILED" in human
+    assert "disk full" in human
+
+
+# ----------------------------------------------------------------------------------- timing report
+
+
+def test_closing_writes_a_timings_report_beside_the_trace(tmp_path):
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("run_started", url="https://x", planner="staged")
+    logger.log("run_finished", result={"status": "success", "steps": 1})
+    logger.close()
+    report = tmp_path / "j.timing.log"
+    assert report.exists()
+    content = report.read_text(encoding="utf-8")
+    assert "run_started" in content
+    assert "outcome=success" in content
+
+
+def test_the_timing_path_sits_beside_the_other_two_artefacts(tmp_path):
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("run_started", url="u")
+    logger.close()
+    assert logger.path.endswith("j.jsonl")
+    assert logger.human_path.endswith("j.log")
+    assert logger.timing_path.endswith("j.timing.log")
+
+
+def test_a_custom_log_path_still_yields_a_matching_timing_path(tmp_path):
+    logger = JourneyLogger(str(tmp_path / "custom.log"))
+    logger.log("run_started", url="u")
+    logger.close()
+    assert logger.timing_path == str(tmp_path / "custom.timing.log")
+    assert (tmp_path / "custom.timing.log").exists()
+
+
+def test_the_timings_report_is_not_world_readable(tmp_path):
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("run_started", url="u")
+    logger.close()
+    assert (tmp_path / "j.timing.log").stat().st_mode & 0o077 == 0
+
+
+def test_the_timings_report_contains_only_timings(tmp_path):
+    """The point of the file: events and durations, with no payloads to wade through."""
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log(
+        "llm_request",
+        request={"model": "m", "messages": [{"role": "user", "content": "a long prompt " * 50}]},
+    )
+    logger.log("run_finished", result={"status": "success"})
+    logger.close()
+    report = (tmp_path / "j.timing.log").read_text(encoding="utf-8")
+    assert "a long prompt" not in report
+    assert "llm_request" in report
+
+
+def test_a_failed_timing_render_still_closes_the_logger(tmp_path, monkeypatch):
+    """Losing the trace because a derived report failed would be the wrong trade."""
+    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
+    logger.log("run_started", url="u")
+
+    def boom() -> str:
+        raise RuntimeError("cannot render")
+
+    monkeypatch.setattr(logger, "write_timing_report", boom)
+    logger.close()
+    assert logger._handle.closed
+    assert (tmp_path / "j.jsonl").exists()
+
+
 def test_jsonl_files_are_not_world_readable(tmp_path):
     logger = JourneyLogger(str(tmp_path / "j.jsonl"))
     logger.log("a")

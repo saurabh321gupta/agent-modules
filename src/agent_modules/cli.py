@@ -15,7 +15,7 @@ import sys
 from .config import DEFAULT_BASE_URL, DEFAULT_JEV_MODEL, DEFAULT_MODEL, DEFAULT_ZOOM, AutomationDefaults, RunConfig
 from .files import load_answer_bank, parse_asset, read_api_key
 from .orchestrator import run_application
-from .types import CandidateProfile
+from .models import CandidateProfile
 
 __all__ = [
     "build_parser",
@@ -43,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
             "(default); 'llm' is the single generative planner; 'jev' is the Jev per-field planner"
         ),
     )
+    parser.add_argument(
+        "--normalise",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Send form pages to the planner as normalised questions, one model call per form shape (default). --no-normalise sends the raw snapshot instead, which carries the site's own validation errors inline, and is useful for comparing the two",
+    )
     parser.add_argument("--jev-api-key-file", help="Jev API key file, required by the staged and jev planners")
     parser.add_argument("--jev-model", default=DEFAULT_JEV_MODEL)
     parser.add_argument("--jev-confidence", type=float, default=0.35, help="Minimum confidence for a Jev answer to be acted on (default 0.35)")
@@ -52,7 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--field-pause", type=float, default=0.0, metavar="SECONDS", help="Pause after typing into a field and before leaving it, to let the site's own validation run (default 0)")
     parser.add_argument("--zoom", type=float, default=DEFAULT_ZOOM, help="Starting browser zoom; the agent zooms out further when a page is taller than the window. 1.0 disables")
     parser.add_argument("--max-steps", type=int, default=40)
-    parser.add_argument("--max-seconds", type=float, default=300.0, help="Hard budget for one application; the run is discarded rather than submitted if it is not done within this (default 300s)")
+    parser.add_argument("--max-seconds", type=float, default=300.0, help="Hard budget for one application; the run is discarded rather than submitted if it is not done within this (default 300s). Raise it when debugging, since the budget is wall-clock and a debugger does not stop the clock")
+    parser.add_argument("--request-timeout", type=float, default=60.0, metavar="SECONDS", help="Wall-clock bound for one model call (default 60s), clamped down to whatever is left of the run budget. Raise it when stepping through a debugger inside a call")
+    parser.add_argument("--hedge-after", type=float, default=30.0, metavar="SECONDS", help="Fire an identical request in parallel if the first has not answered within this (default 30s); whichever answers first is used and the other abandoned. 0 disables it")
+    parser.add_argument("--trace", metavar="PATH", help="Record a Playwright trace (screenshots, DOM snapshots and every action) to this path, for replay with 'playwright show-trace'. Off by default")
     parser.add_argument(
         "--effort",
         choices=["default", "low", "medium", "high"],
@@ -79,12 +88,16 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         answers=load_answer_bank(args.defaults) if args.defaults else {},
         answers_path=args.defaults,
         planner=args.planner,
+        normalise=args.normalise,
         jev_api_key=read_api_key(args.jev_api_key_file) if args.jev_api_key_file else None,
         jev_model=args.jev_model,
         jev_confidence_floor=args.jev_confidence,
         defaults=AutomationDefaults(accept_matching_consents=not args.no_default_consents),
         journey_log_path=args.journey_log,
         max_run_seconds=args.max_seconds,
+        request_timeout_s=args.request_timeout,
+        hedge_after_s=args.hedge_after,
+        trace_path=args.trace,
         reasoning_effort=None if args.effort == "default" else args.effort,
     )
 
