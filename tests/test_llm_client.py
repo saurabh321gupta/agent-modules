@@ -339,7 +339,7 @@ async def test_thinking_is_absent_when_not_requested():
 
 
 async def test_thinking_reaches_the_structured_call_too():
-    """The planner and the normaliser both go through complete_json."""
+    """The answering call goes through complete_json, where the schema fallback lives."""
 
     async def handler(body, n):
         return fake_response("{}")

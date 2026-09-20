@@ -2,10 +2,11 @@
 
 The point of the staging is cost: most pages in an application are not form steps. An advert, a
 review screen and a confirmation page can all be handled by a single cheap classification call and a
-deterministic click, and only a real form step justifies normalising and then answering.
+deterministic click, and only a real form step justifies an answering call.
 
-It exposes the same `next_step` signature as every other planner, so the orchestrator, validator,
-executor and verifier are unchanged: the branching lives here, not in the engine.
+The answering call is handed the page as a person sees it - no normalised form, no history, no id to
+echo back. It exposes the same `next_step` signature as every other planner, so the orchestrator,
+validator, executor and verifier are unchanged: the branching lives here, not in the engine.
 """
 
 from __future__ import annotations
@@ -16,10 +17,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .journey import JourneyLogger
-from .normalizer import Normalizer
+from .models import Action, ApplicationPlan, CandidateProfile, CompletionEvidence, PageSnapshot
 from .planner_llm import LLMPlanner
 from .prompts_jev import APPLY_MARKERS, classify_controls, classify_questions, classify_state
-from .models import Action, ApplicationPlan, CandidateProfile, CompletionEvidence, PageSnapshot
 
 PageClass = Literal[
     "job_listing",
@@ -58,19 +58,14 @@ class StagedPlanner:
     def __init__(
         self,
         classifier: Any,
-        normalizer: Normalizer,
         planner: LLMPlanner,
         assets: dict[str, str] | None = None,
-        normalise: bool = True,
         journey: JourneyLogger | None = None,
     ) -> None:
         self.classifier = classifier
-        self.normalizer = normalizer
         self.planner = planner
         #: The assets registered for this run, so the resume can be attached without a path.
         self.assets = assets or {}
-        #: Off sends the raw snapshot to the planner instead of normalised questions.
-        self.normalise = normalise
         self.journey = journey
         self.last_step: dict[str, Any] = {}
 
@@ -78,7 +73,6 @@ class StagedPlanner:
         self,
         profile: CandidateProfile,
         snapshot: PageSnapshot,
-        history: list[dict[str, Any]],
     ) -> ApplicationPlan:
         decision = await self.classify(snapshot)
 
@@ -93,8 +87,7 @@ class StagedPlanner:
         branch = decision.page_class
         if branch in ("captcha", "login"):
             return self.plan(
-                snapshot,
-                "blocked",
+                                "blocked",
                 f"Jev classified this page as {branch.replace('_', ' ')}.",
                 [],
                 decision,
@@ -105,13 +98,12 @@ class StagedPlanner:
             return self.click_branch(snapshot, decision)
         if branch == "other" and decision.confidence >= CLASS_FLOOR:
             return self.plan(
-                snapshot,
-                "needs_input",
+                                "needs_input",
                 "Jev could not identify this page as part of a job application.",
                 [],
                 decision,
             )
-        return await self.form_branch(profile, snapshot, history, decision)
+        return await self.form_branch(profile, snapshot, decision)
 
     # --------------------------------------------------------------------------------- classify
 
@@ -243,8 +235,7 @@ class StagedPlanner:
                 ),
             )
         return self.plan(
-            snapshot,
-            "continue",
+                        "continue",
             f"Attach the resume to {element.label or element.id} before answering this page "
             f"(Jev confidence {decision.resume_confidence:.2f}).",
             [self.action("upload", element.id, asset_id=asset)],
@@ -277,16 +268,14 @@ class StagedPlanner:
                     note="Not certain enough to declare the application submitted; treating it as a form.",
                 )
             return self.plan(
-                snapshot,
-                "needs_input",
+                                "needs_input",
                 "Page looks like a confirmation but the evidence is not strong enough to finish.",
                 [],
                 decision,
             )
         evidence_text = next((line for line in snapshot.visible_text if line.strip()), "")
         return self.plan(
-            snapshot,
-            "complete",
+                        "complete",
             "Jev reports a confirmation page.",
             [],
             decision,
@@ -297,8 +286,7 @@ class StagedPlanner:
         element = next((e for e in snapshot.elements if e.id == decision.control_id), None)
         if element is None or not element.enabled:
             return self.plan(
-                snapshot,
-                "needs_input",
+                                "needs_input",
                 f"Jev reported a {decision.page_class} page but named no usable control.",
                 [],
                 decision,
@@ -308,15 +296,13 @@ class StagedPlanner:
             marker in label for marker in APPLY_MARKERS
         ):
             return self.plan(
-                snapshot,
-                "needs_input",
+                                "needs_input",
                 f"Jev reported a job listing but chose '{element.label}', which does not start an application.",
                 [],
                 decision,
             )
         return self.plan(
-            snapshot,
-            "continue",
+                        "continue",
             f"{decision.page_class}: press {element.label!r} "
             f"(Jev confidence {decision.control_confidence:.2f}). "
             "No planner call was needed for this page.",
@@ -328,16 +314,10 @@ class StagedPlanner:
         self,
         profile: CandidateProfile,
         snapshot: PageSnapshot,
-        history: list[dict[str, Any]],
         decision: PageDecision,
     ) -> ApplicationPlan:
-        """The only expensive branch.
-
-        Normalised, the model answers canonical questions; raw, it answers the page itself, which
-        carries the site's validation errors inline but costs a much larger payload.
-        """
-        form = await self.normalizer.normalise(snapshot) if self.normalise else None
-        plan = await self.planner.next_step(profile, snapshot, history, form=form)
+        """The only expensive branch: hand the page to the answering model."""
+        plan = await self.planner.next_step(profile, snapshot)
         self.last_step = {
             "class": decision.page_class,
             "confidence": decision.confidence,
@@ -349,7 +329,6 @@ class StagedPlanner:
 
     def plan(
         self,
-        snapshot: PageSnapshot,
         status: str,
         reason: str,
         actions: list[Action],
@@ -362,7 +341,6 @@ class StagedPlanner:
             "actions": len(actions),
         }
         return ApplicationPlan(
-            snapshot_id=snapshot.snapshot_id,
             status=status,  # type: ignore[arg-type]
             actions=actions,
             reason=reason,

@@ -19,7 +19,7 @@ from typing import Any
 SLOW_MS = 5_000
 
 #: Detail for these is pulled from the tokens the provider reported, not from wall-clock deltas.
-_MODEL_RESPONSE_EVENTS = ("llm_response", "normalise_response", "jev_response")
+_MODEL_RESPONSE_EVENTS = ("llm_response", "jev_response")
 
 
 def _short(value: Any, limit: int = 58) -> str:
@@ -56,19 +56,6 @@ def _detail(event: str, data: dict[str, Any]) -> str:
     if event == "page_classified":
         decision = data.get("decision") or {}
         return f"{decision.get('page_class', '')} ({float(decision.get('confidence') or 0):.2f})"
-    if event == "normalise_request":
-        request = data.get("request") or {}
-        messages = request.get("messages") or []
-        controls = 0
-        if messages:
-            try:
-                controls = len(json.loads(messages[-1]["content"]).get("controls") or [])
-            except Exception:
-                controls = 0
-        return f"{controls} control(s)"
-    if event == "normalised_form":
-        cached = "cached" if data.get("cached") else "fresh"
-        return f"{data.get('field_count', 0)} field(s) · {cached}"
     if event in _MODEL_RESPONSE_EVENTS:
         return f"{data.get('prompt_tokens', '?')}+{data.get('completion_tokens', '?')} tokens"
     if event == "llm_request":

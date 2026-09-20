@@ -1,4 +1,4 @@
-"""Tests for `agent_modules.prompts_llm` — what the main model is told and given."""
+"""Tests for `agent_modules.prompts_llm` — what the answering model is told and given."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from helpers import element, profile, snapshot
 
 from agent_modules.config import AutomationDefaults
 from agent_modules.prompts_llm import (
-    FILLED_OPTION_WINDOW,
-    FORM_SYSTEM_PROMPT,
-    MAIN_SYSTEM_PROMPT,
     BATCH_RULE,
+    FILLED_OPTION_WINDOW,
+    FILLED_RULE,
+    MAIN_SYSTEM_PROMPT,
     MAX_OPTIONS_SENT,
     REJECTION_RULE,
     UPLOAD_RULE,
@@ -25,83 +25,62 @@ from agent_modules.prompts_llm import (
 ASSETS = {"resume_primary": "/tmp/resume.pdf"}
 
 
-# ------------------------------------------------------------------------------ upload instruction
-
-
-def test_both_prompts_state_the_upload_rule():
-    """Regression: the model was told to skip buttons, and saw only an 'Upload Resume' button."""
-    assert UPLOAD_RULE in MAIN_SYSTEM_PROMPT
-    assert UPLOAD_RULE in FORM_SYSTEM_PROMPT
-    assert "upload action" in UPLOAD_RULE
-    assert "asset_id" in UPLOAD_RULE
-
-
-def test_both_prompts_explain_that_only_one_page_changing_action_can_land():
-    """A batch ends at a click, an upload or a scroll, so pairing an upload with a click means only
-    the upload happens and the page never advances - which is exactly what closed a live run."""
-    assert BATCH_RULE in MAIN_SYSTEM_PROMPT
-    assert BATCH_RULE in FORM_SYSTEM_PROMPT
-    assert "at most one of them can take effect" in BATCH_RULE
-    assert "Never pair an upload with a click" in BATCH_RULE
-
-
-def test_both_prompts_warn_against_repeating_a_rejected_value():
-    """Telling the model about an error is not enough if it has no instruction for what to do.
-
-    The failure this prevents: the site refuses a value, the model sees it, and proposes the same
-    value again because nothing told it that the format was the problem.
-    """
-    assert REJECTION_RULE in MAIN_SYSTEM_PROMPT
-    assert REJECTION_RULE in FORM_SYSTEM_PROMPT
-    assert "rejected" in REJECTION_RULE
-    assert "validation_errors" in REJECTION_RULE
-    assert "without one" in REJECTION_RULE, "the phone-number case is named explicitly"
-
-
 def flat(prompt: str) -> str:
     """Collapse whitespace so an assertion does not depend on where the prompt happens to wrap."""
     return " ".join(prompt.split())
 
 
-def test_the_prompts_do_not_promise_a_reference_the_code_refuses():
-    """The form prompt used to say "or an answers.* path", and nothing resolves that.
+# ------------------------------------------------------------------------------------------ rules
 
-    A prompt naming a mechanism the validator rejects is worse than a vague one: the rejection reads
-    like a typo in a profile path, so the model retries another path that cannot work either.
-    """
-    assert "answers.*" not in FORM_SYSTEM_PROMPT
+
+def test_the_prompt_carries_all_four_rules():
+    for rule in (UPLOAD_RULE, BATCH_RULE, FILLED_RULE, REJECTION_RULE):
+        assert rule in MAIN_SYSTEM_PROMPT
+
+
+def test_the_upload_rule_says_an_offered_file_field_needs_a_file():
+    assert "asset_id" in UPLOAD_RULE
+    assert "never skip an empty one" in UPLOAD_RULE
+    assert "not offered to you at all" in UPLOAD_RULE, "an attached field never reaches the model"
+
+
+def test_the_batch_rule_explains_only_one_page_changing_action_can_land():
+    """A batch ends at a click, an upload or a scroll, so pairing an upload with a click means only
+    the upload happens and the page never advances - which is exactly what closed a live run."""
+    assert "at most one of them can take effect" in BATCH_RULE
+    assert "Never pair an upload with a click" in BATCH_RULE
+
+
+def test_the_filled_rule_names_the_keys_the_page_actually_carries():
+    """It used to name `current_value`, which only existed in a payload we no longer send."""
+    text = flat(FILLED_RULE)
+    assert "value says what a field contains" in text
+    assert "checked says whether a checkbox or radio is already set" in text
+    assert "current_value" not in text
+
+
+def test_the_rejection_rule_names_the_keys_the_page_actually_carries():
+    """Same trap: `rejected` was a normalised-form key. The page marks a control `invalid`."""
+    text = flat(REJECTION_RULE)
+    assert '"invalid": true' in text
+    assert "validation_errors" in text
+    assert '"rejected"' not in text
+    assert "without one" in text, "the phone-number case is named explicitly"
+
+
+def test_the_prompt_does_not_promise_a_history_that_is_not_sent():
+    """Anything the prompt refers to has to be in the payload, or it describes a capability the code
+    does not have - which has bitten this project repeatedly."""
+    assert "recent_history" not in MAIN_SYSTEM_PROMPT
+
+
+def test_the_prompt_does_not_promise_an_answer_bank_reference_that_nothing_resolves():
+    """It used to say "or an answers.* path", and nothing resolves that."""
     assert "answers.*" not in MAIN_SYSTEM_PROMPT
 
 
-def test_the_form_prompt_says_the_bank_must_be_sent_as_a_literal():
-    """Removing the false claim is only half the fix; the model needs the replacement rule."""
-    text = flat(FORM_SYSTEM_PROMPT)
-    assert "value_ref works only for the candidate profile" in text
-    assert "there is no reference form for user_provided_answers" in text
-    assert "must be sent as a literal value" in text
-
-
-def test_the_form_prompt_warns_that_a_profile_path_cannot_be_reformatted():
-    """The trap that caused the phone loop: a path reproduces the profile's own formatting."""
-    text = flat(FORM_SYSTEM_PROMPT)
-    assert "Prefer a literal when the field constrains its format" in text
-    assert "cannot be reformatted for the field" in text
-
-
-def test_form_prompt_keeps_its_other_rules():
-    for fragment in (
-        "snapshot_id",
-        "up to 12 actions",
-        "field_type button or unknown",
-        "return needs_input naming it",
-        "Click a submit control only once",
-        "visible evidence that the application was received",
-    ):
-        assert fragment in FORM_SYSTEM_PROMPT, fragment
-
-
-def test_form_prompt_has_no_unsubstituted_placeholder():
-    assert "%s" not in FORM_SYSTEM_PROMPT
+def test_the_prompt_carries_no_unsubstituted_placeholder():
+    assert "%s" not in MAIN_SYSTEM_PROMPT
 
 
 # ------------------------------------------------------------------------------------- schema mode
@@ -117,6 +96,11 @@ def test_with_schema_appends_the_schema_in_json_mode():
     assert "no markdown fences" in rendered
     payload = json.loads(rendered.split("exactly:\n", 1)[1])
     assert payload["title"] == "ApplicationPlan"
+
+
+def test_the_plan_schema_no_longer_asks_for_a_snapshot_id():
+    properties = response_format_for("json_schema")["json_schema"]["schema"]["properties"]
+    assert "snapshot_id" not in properties
 
 
 def test_response_format_for_marks_the_schema_strict():
@@ -170,11 +154,39 @@ def test_defaults_are_injected_under_a_clear_key():
 
 
 def test_profile_payload_is_json_serialisable():
-    payload = profile_for_llm(profile(), ASSETS, AutomationDefaults())
-    json.dumps(payload)
+    json.dumps(profile_for_llm(profile(), ASSETS, AutomationDefaults()))
 
 
 # ---------------------------------------------------------------------------------- page payload
+
+
+def test_the_page_payload_is_the_whole_page():
+    """The model sees the page as a person does: text, controls, errors, blockers."""
+    snap = snapshot([element("e1", label="City")], visible_text=["Apply for this job"])
+    payload = snapshot_for_llm(snap)
+    assert set(payload) >= {"url", "title", "visible_text", "elements", "validation_errors"}
+    assert payload["elements"][0]["label"] == "City"
+
+
+def test_the_page_payload_carries_the_sites_own_errors():
+    """The rule about rejected values is only obeyable because these travel with the page."""
+    payload = snapshot_for_llm(snapshot([], validation_errors=["Email is invalid"]))
+    assert payload["validation_errors"] == ["Email is invalid"]
+
+
+def test_an_element_carries_its_state_and_its_rejection():
+    payload = snapshot_for_llm(
+        snapshot(
+            [
+                element("e1", role="checkbox", label="I consent", checked=True),
+                element("e2", label="Phone", value="91-8386", invalid=True),
+            ]
+        )
+    )
+    first, second = payload["elements"]
+    assert first["checked"] is True
+    assert second["invalid"] is True
+    assert second["value"] == "91-8386"
 
 
 def test_an_unset_dropdown_keeps_every_option():
@@ -207,28 +219,6 @@ def test_an_already_set_dropdown_is_windowed():
     assert payload["elements"][0]["options_truncated"] is True
     assert len(kept) == 1 + 2 * FILLED_OPTION_WINDOW
     assert kept[0]["value"] == "C200", "the current selection must always be included"
-
-
-def test_include_all_options_is_the_escape_hatch():
-    """Set after a plan is rejected for choosing an option that was not in the window we sent."""
-    options = [(f"C{i}", f"Choice {i}") for i in range(400)]
-    payload = snapshot_for_llm(
-        snapshot(
-            [
-                element(
-                    "e1",
-                    role="combobox",
-                    label="Country",
-                    input_type="select-one",
-                    options=options,
-                    value="C200",
-                )
-            ]
-        ),
-        include_all_options=True,
-    )
-    assert len(payload["elements"][0]["options"]) == 400
-    assert "options_truncated" not in payload["elements"][0]
 
 
 def test_an_enormous_unset_dropdown_is_capped_but_keeps_head_and_tail():

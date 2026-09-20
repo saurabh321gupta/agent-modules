@@ -14,23 +14,13 @@ from helpers import element, profile, snapshot
 
 from agent_modules.config import AutomationDefaults
 from agent_modules.journey import JourneyLogger
-from agent_modules.normalizer import Normalizer
 from agent_modules.planner_llm import LLMPlanner
 from agent_modules.planner_staged import StagedPlanner
 
 APPLICANT = profile()
 
-FORM_REPLY = json.dumps(
-    {
-        "page_kind": "form",
-        "fields": [{"id": "e1", "question": "Which city?", "field_type": "text", "required": True}],
-        "submit_controls": [],
-    }
-)
-
 PLAN_REPLY = json.dumps(
     {
-        "snapshot_id": "s-1-abc12345",
         "status": "continue",
         "actions": [
             {
@@ -49,23 +39,11 @@ PLAN_REPLY = json.dumps(
 )
 
 
-def make(
-    answers,
-    *,
-    form_reply=FORM_REPLY,
-    plan_reply=PLAN_REPLY,
-    raises=None,
-    journey=None,
-    normalise=True,
-):
+def make(answers, *, plan_reply=PLAN_REPLY, raises=None, journey=None):
     classifier = FakeClassifier(answers, raises=raises)
-    # Without normalisation the normaliser is never called, so only the plan reply is queued.
-    model = FakeModelClient([plan_reply] if not normalise else [form_reply, plan_reply])
-    normalizer = Normalizer(model, "model", journey=journey)
+    model = FakeModelClient([plan_reply])
     planner = LLMPlanner(model, "model", defaults=AutomationDefaults(), journey=journey)
-    staged = StagedPlanner(
-        classifier, normalizer, planner, normalise=normalise, journey=journey
-    )
+    staged = StagedPlanner(classifier, planner, journey=journey)
     return classifier, model, staged
 
 
@@ -78,7 +56,7 @@ FORM_PAGE = snapshot([element("e1", label="City", required=True)])
 @pytest.mark.parametrize("kind", ["captcha", "login"])
 async def test_a_wall_is_reported_as_blocked(kind):
     _, model, staged = make(classification(kind))
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "blocked"
     assert model.calls == [], "a wall must not cost an answering call"
 
@@ -87,7 +65,7 @@ async def test_a_confirmation_page_with_strong_evidence_completes():
     _, model, staged = make(
         classification("application_submitted", 0.95, submitted_evidence={"type": "noul", "noul": 0.95})
     )
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "complete"
     assert plan.completion_evidence is not None
     assert model.calls == []
@@ -98,7 +76,7 @@ async def test_a_weak_confirmation_verdict_is_refused():
     _, model, staged = make(
         classification("application_submitted", 0.8, submitted_evidence={"type": "noul", "noul": 0.5})
     )
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "needs_input"
 
 
@@ -106,7 +84,7 @@ async def test_a_confirmation_verdict_without_visible_evidence_is_refused():
     _, model, staged = make(
         classification("application_submitted", 0.9, submitted_evidence={"type": "noul", "noul": 0.1})
     )
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "needs_input"
 
 
@@ -125,7 +103,7 @@ async def test_a_job_listing_is_advanced_by_a_click_and_no_answering_call():
     _, model, staged = make(
         classification("job_listing", 0.95, next_control={"type": "choice", "choice": "e1", "confidence": 0.9})
     )
-    plan = await staged.next_step(APPLICANT, JOB_PAGE, [])
+    plan = await staged.next_step(APPLICANT, JOB_PAGE)
     assert plan.status == "continue"
     assert [a.target for a in plan.actions] == ["e1"]
     assert model.calls == [], "classification alone is enough for an advert"
@@ -136,13 +114,13 @@ async def test_a_review_page_is_advanced_by_a_click():
     _, model, staged = make(
         classification("job_review", 0.9, next_control={"type": "choice", "choice": "e1", "confidence": 0.9})
     )
-    plan = await staged.next_step(APPLICANT, JOB_PAGE, [])
+    plan = await staged.next_step(APPLICANT, JOB_PAGE)
     assert [a.target for a in plan.actions] == ["e1"]
 
 
 async def test_a_job_listing_without_a_usable_control_stops():
     _, _, staged = make(classification("job_listing", 0.95))
-    plan = await staged.next_step(APPLICANT, JOB_PAGE, [])
+    plan = await staged.next_step(APPLICANT, JOB_PAGE)
     assert plan.status == "needs_input"
 
 
@@ -151,7 +129,7 @@ async def test_a_job_listing_control_that_does_not_apply_is_refused():
     _, model, staged = make(
         classification("job_listing", 0.95, next_control={"type": "choice", "choice": "e2", "confidence": 0.9})
     )
-    plan = await staged.next_step(APPLICANT, JOB_PAGE, [])
+    plan = await staged.next_step(APPLICANT, JOB_PAGE)
     assert plan.status == "needs_input"
     assert "does not start an application" in plan.reason
 
@@ -160,58 +138,37 @@ async def test_a_control_id_not_on_the_page_is_discarded():
     _, _, staged = make(
         classification("job_listing", 0.95, next_control={"type": "choice", "choice": "e404", "confidence": 0.9})
     )
-    plan = await staged.next_step(APPLICANT, JOB_PAGE, [])
+    plan = await staged.next_step(APPLICANT, JOB_PAGE)
     assert plan.status == "needs_input"
 
 
 # ------------------------------------------------------------------------------------ form branch
 
 
-async def test_a_form_page_is_normalised_then_answered():
+async def test_a_form_page_is_answered_with_the_page_itself():
     _, model, staged = make(classification("application_form", 0.95))
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "continue"
     assert plan.actions[0].value_ref == "location.city"
-    kinds = [call["kind"] for call in model.calls]
-    assert kinds == ["complete", "complete_json"]
+    assert [call["kind"] for call in model.calls] == ["complete_json"], "one call, nothing else"
 
 
-async def test_the_answering_call_receives_the_normalised_questions():
+async def test_the_answering_call_receives_the_page_as_the_reader_saw_it():
     _, model, staged = make(classification("application_form", 0.95))
-    await staged.next_step(APPLICANT, FORM_PAGE, [])
-    sent = json.loads(model.calls[1]["messages"][1]["content"])
-    assert sent["form"]["questions"][0]["question"] == "Which city?"
-    assert "current_page" not in sent
-
-
-# ------------------------------------------------------------------------------- the bypass switch
-
-
-async def test_normalisation_is_on_by_default():
-    _, model, staged = make(classification("application_form", 0.95))
-    await staged.next_step(APPLICANT, FORM_PAGE, [])
-    assert [call["kind"] for call in model.calls] == ["complete", "complete_json"]
-
-
-async def test_the_bypass_sends_the_raw_snapshot_instead():
-    """Off, the normaliser is never called and the page goes to the planner as it is."""
-    _, model, staged = make(classification("application_form", 0.95), normalise=False)
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
-    assert plan.status == "continue"
-    assert [call["kind"] for call in model.calls] == ["complete_json"], "no normaliser call"
+    await staged.next_step(APPLICANT, FORM_PAGE)
     sent = json.loads(model.calls[0]["messages"][1]["content"])
-    assert "current_page" in sent
-    assert "form" not in sent
+    assert set(sent) == {"candidate_profile", "user_provided_answers", "current_page"}
+    assert sent["current_page"]["elements"][0]["label"] == "City"
 
 
-async def test_the_bypass_carries_the_sites_validation_errors_inline():
-    """Which is the reason to reach for it: the raw snapshot includes them, per element and per page."""
+async def test_the_page_carries_the_sites_validation_errors_inline():
+    """The rule about rejected values is only obeyable because these travel with the page."""
     snap = snapshot(
         [element("e1", label="City", required=True, invalid=True, value="91-0000000000")],
         validation_errors=["City is not in a valid format"],
     )
-    _, model, staged = make(classification("application_form", 0.95), normalise=False)
-    await staged.next_step(APPLICANT, snap, [])
+    _, model, staged = make(classification("application_form", 0.95))
+    await staged.next_step(APPLICANT, snap)
     page = json.loads(model.calls[0]["messages"][1]["content"])["current_page"]
     assert page["validation_errors"] == ["City is not in a valid format"]
     assert page["elements"][0]["invalid"] is True
@@ -220,20 +177,20 @@ async def test_the_bypass_carries_the_sites_validation_errors_inline():
 async def test_a_low_confidence_verdict_falls_through_to_the_form_path():
     """Below the floor the verdict is 'cannot tell', and answering a form is the safe default."""
     _, model, staged = make(classification("job_listing", 0.1))
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "continue"
     assert any(call["kind"] == "complete_json" for call in model.calls)
 
 
 async def test_an_unknown_page_class_falls_through_to_the_form_path():
     _, model, staged = make({"page_class": {"type": "choice", "choice": "nonsense", "confidence": 0.99}})
-    await staged.next_step(APPLICANT, FORM_PAGE, [])
+    await staged.next_step(APPLICANT, FORM_PAGE)
     assert any(call["kind"] == "complete_json" for call in model.calls)
 
 
 async def test_an_unrecognised_page_stops_when_the_verdict_is_confident():
     _, model, staged = make(classification("other", 0.95))
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "needs_input"
     assert model.calls == []
 
@@ -241,7 +198,7 @@ async def test_an_unrecognised_page_stops_when_the_verdict_is_confident():
 async def test_a_classification_failure_falls_back_to_the_form_path():
     """Without classification the behaviour is the plain planner, which is the pre-staging default."""
     _, model, staged = make(None, raises=RuntimeError("jev is down"))
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "continue"
     assert plan.actions[0].value_ref == "location.city"
 
@@ -249,7 +206,7 @@ async def test_a_classification_failure_falls_back_to_the_form_path():
 async def test_a_denied_submission_notice_is_not_treated_as_a_form():
     """A page that merely mentions submission without evidence is not proof of anything."""
     _, _, staged = make(classification("application_form", 0.9))
-    plan = await staged.next_step(APPLICANT, FORM_PAGE, [])
+    plan = await staged.next_step(APPLICANT, FORM_PAGE)
     assert plan.status == "continue"
 
 
@@ -259,7 +216,7 @@ async def test_a_denied_submission_notice_is_not_treated_as_a_form():
 async def test_last_step_reports_the_classification_for_a_form_page():
     """Regression: without this the STEP TIMING line attributed every form step to the first page."""
     _, _, staged = make(classification("application_form", 0.88))
-    await staged.next_step(APPLICANT, FORM_PAGE, [])
+    await staged.next_step(APPLICANT, FORM_PAGE)
     assert staged.last_step["class"] == "application_form"
     assert staged.last_step["confidence"] == 0.88
     assert staged.last_step["actions"] == 1
@@ -269,7 +226,7 @@ async def test_last_step_reports_the_classification_for_a_click_branch():
     _, _, staged = make(
         classification("job_listing", 0.95, next_control={"type": "choice", "choice": "e1", "confidence": 0.9})
     )
-    await staged.next_step(APPLICANT, JOB_PAGE, [])
+    await staged.next_step(APPLICANT, JOB_PAGE)
     assert staged.last_step["class"] == "job_listing"
     assert staged.last_step["actions"] == 1
 
@@ -280,7 +237,7 @@ async def test_last_step_reports_the_classification_for_a_click_branch():
 async def test_the_classification_is_logged(tmp_path):
     logger = JourneyLogger(str(tmp_path / "j.jsonl"))
     _, _, staged = make(classification("application_form", 0.9), journey=logger)
-    await staged.next_step(APPLICANT, FORM_PAGE, [])
+    await staged.next_step(APPLICANT, FORM_PAGE)
     logger.close()
     events = [json.loads(line)["event"] for line in (tmp_path / "j.jsonl").read_text().splitlines() if line]
     assert "classify_request" in events
@@ -292,7 +249,7 @@ async def test_the_classification_is_logged(tmp_path):
 async def test_a_classification_failure_is_logged(tmp_path):
     logger = JourneyLogger(str(tmp_path / "j.jsonl"))
     _, _, staged = make(None, raises=RuntimeError("jev down"), journey=logger)
-    await staged.next_step(APPLICANT, FORM_PAGE, [])
+    await staged.next_step(APPLICANT, FORM_PAGE)
     logger.close()
     assert "Classification    : FAILED" in (tmp_path / "j.log").read_text(encoding="utf-8")
 
@@ -303,7 +260,7 @@ async def test_a_refused_submitted_verdict_is_logged(tmp_path):
         classification("application_submitted", 0.9, submitted_evidence={"type": "noul", "noul": 0.1}),
         journey=logger,
     )
-    await staged.next_step(APPLICANT, FORM_PAGE, [])
+    await staged.next_step(APPLICANT, FORM_PAGE)
     logger.close()
     assert "REJECTED (not certain enough)" in (tmp_path / "j.log").read_text(encoding="utf-8")
 

@@ -68,10 +68,6 @@ def test_tracing_is_off_by_default():
     assert RunConfig(trace_path="/tmp/t.zip").trace_path == "/tmp/t.zip"
 
 
-def test_normalisation_is_on_by_default():
-    assert RunConfig().normalise is True
-    assert RunConfig(normalise=False).normalise is False
-
 
 def test_answers_default_is_not_shared():
     first = RunConfig()
@@ -107,10 +103,8 @@ def test_batch_and_choice_limits_are_sane():
 
 
 def test_thinking_defaults():
-    """Normalisation reasons for nothing; answering is left to the provider until it is measured."""
-    config = RunConfig()
-    assert config.normaliser_thinking is False
-    assert config.planner_thinking is None
+    """Answering involves real judgement, so the provider decides until someone measures it."""
+    assert RunConfig().planner_thinking is None
 
 
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path

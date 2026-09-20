@@ -15,7 +15,7 @@ isolation: nothing above a module can leak into its tests.
 ```
 L6  cli, profile_builder   entry points
 L5  orchestrator           the run loop, budget, retries, browser lifecycle
-L4  planners               normalizer, planner_llm, planner_jev, planner_staged
+L4  planners               planner_llm, planner_jev, planner_staged, validator
 L3  clients                llm_client, jev_client          (network transport only)
 L2  builders/browser       prompts_llm, prompts_jev, reader, overlays, executor
 L1  pure logic             files, policy, validator, verifier, extractor
@@ -31,7 +31,7 @@ The upper layers never touch I/O directly. That is the whole reason they can be 
 network or a model.
 
 - **`ModelClient`** — an async completion port. `llm_client.DeepSeekClient` implements it in
-  production; `tests/fakes.FakeModelClient` implements it in tests. Planners and the normalizer accept
+  production; `tests/fakes.FakeModelClient` implements it in tests. Planners accept
   this port, never a raw `AsyncOpenAI`.
 - **`Page`** — Playwright's own type, used directly by `reader`, `overlays` and `executor`. Tests drive
   a real headless Chromium against `tests/fixtures/*.html` via `page.set_content()`, so the injected
@@ -84,15 +84,9 @@ job-agent ... \
   --request-timeout 3600 \  # per model call, clamped to what is left of the budget
   --hedge-after 0 \         # never race a duplicate against your breakpoints
   --trace run-artifacts/trace.zip \   # replay afterwards with: playwright show-trace
-  --no-normalise \          # optional: send the raw page instead of normalised questions
   --no-submit
 ```
 
-`--no-normalise` is worth knowing about beyond debugging. Normalised, the planner answers canonical
-questions, one model call per form shape; raw, it answers the page itself, which costs a much larger
-payload but carries the site's own validation messages and per-field rejection flags inline. The two
-behave differently on a page that is refusing an answer, and comparing them on a live form is the
-only way to judge the trade.
 
 The same parameters belong in the PyCharm run configuration. Useful places to break: `extractor.describe`
 (what the model will be shown), `executor.execute_one` (just before the page is touched),
@@ -118,10 +112,9 @@ refused). Conditional breakpoints such as `action.type == "upload"` are worth th
 | `executor` | The six browser primitives, each verified |
 | `llm_client` | Hedged, deadline-bounded completions |
 | `jev_client` | TypeSafe/System One transport |
-| `normalizer` | Controls -> canonical questions, cached per form |
 | `planner_llm` | Single generative planner |
 | `planner_jev` | Jev per-field planner |
-| `planner_staged` | Classify -> branch -> normalise -> plan |
+| `planner_staged` | Classify -> branch -> answer |
 | `orchestrator` | The loop, the budget, the retry policies |
 | `cli` | Flags to `RunConfig` |
 | `profile_builder` | Offline: resume -> `profile.json` |
@@ -143,5 +136,5 @@ tests/
 ```
 
 `test_replay` is the one to reach for first when something is suspected: it runs real captured pages
-through the extractor, the normaliser and the prompt builders, so a payload regression shows up in
+through the extractor and the prompt builders, so a payload regression shows up in
 milliseconds instead of after a live run.

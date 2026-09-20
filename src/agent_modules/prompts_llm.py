@@ -36,21 +36,21 @@ BATCH_RULE = (
 FILLED_RULE = (
     "- A field that already holds an answer is not a question to answer: leave it out of the plan "
     "entirely. Do not re-fill a text field, re-select a dropdown, or re-tick a checkbox that already "
-    "holds the value you would give it - current_value says what a field contains, and checked says "
-    "whether a checkbox or radio is already set. Repeating a satisfied action wastes a step, and on a "
-    "controlled form it can overwrite what the site itself put there, which a wizard commonly does "
-    "from an uploaded document. The one exception is a control the site has rejected, marked "
-    '"rejected": true or named in validation_errors: that one has to be corrected rather than left alone.'
+    "holds the value you would give it - value says what a field contains, and checked says whether a "
+    "checkbox or radio is already set. Repeating a satisfied action wastes a step, and on a controlled "
+    "form it can overwrite what the site itself put there, which a wizard commonly does from an "
+    "uploaded document. The one exception is a control the site has rejected, marked "
+    '"invalid": true or named in validation_errors: that one has to be corrected rather than left alone.'
 )
 
 REJECTION_RULE = (
-    '- A control the site has rejected is marked "rejected": true, and the site\'s own message '
-    "appears in validation_errors. Never send a rejected value back unchanged: its format is the "
-    "problem, not its content. A phone number refused for containing a hyphen must come back without "
-    "one; a date refused in one layout must come back in the layout the site asked for. Repeating a "
-    "value the site has just refused leaves the page stuck forever, because the same rejection "
-    "follows every time. If no faithful value satisfies the required format, name the field in "
-    "needs_input rather than resending it."
+    '- A control the site has rejected is marked "invalid": true on the element itself, and the '
+    "site's own message appears in validation_errors. Never send a rejected value back unchanged: its "
+    "format is the problem, not its content. A phone number refused for containing a hyphen must come "
+    "back without one; a date refused in one layout must come back in the layout the site asked for. "
+    "Repeating a value the site has just refused leaves the page stuck forever, because the same "
+    "rejection follows every time. If no faithful value satisfies the required format, name the field "
+    "in needs_input rather than resending it."
 )
 
 MAIN_SYSTEM_PROMPT = """
@@ -93,9 +93,6 @@ category. If the profile says "Computer Science" and the list only offers "Compu
 use its exact value. Never stop the run, and never invent an option_value, just because nothing matched
 word for word. The empty placeholder option (usually labelled "Please Select") is never an answer.
 
-A rejected plan appears in recent_history with the reason. When you see one, change your approach:
-the target may have gone stale or the option_value you chose may not exist in that element's list.
-
 Re-check the current snapshot before proposing an action. Never return an action whose desired state is
 already present. In particular, do not repeat set_checked actions for checkboxes whose checked value is
 already true. A needs_input status with only already-satisfied actions is a stale or contradictory plan,
@@ -107,8 +104,9 @@ Submitting is not a decision you get to make. The moment the snapshot shows a su
 observation, do not ask the candidate, and do not return needs_input or complete instead of clicking it.
 A fully filled application that was never submitted is a failed run. The orchestrator still enforces the
 mechanics: it only grants the click when no required field is unresolved and no validation error is
-visible, and it refuses if submission is switched off for the run. If the click is rejected, the reason
-appears in recent_history - fix the remaining fields, then submit on the next observation.
+visible, and it refuses if submission is switched off for the run. If the click is refused, the page
+will still be showing its own validation errors on the next observation - fix what they name, then
+submit.
 
 Never return complete merely because you clicked submit: only visible confirmation text
 ("application received", "thank you for applying", a confirmation number) proves success.
@@ -130,47 +128,6 @@ the supplied text. Match on meaning rather than exact wording: "How did you hear
 shorten it. When a field is covered by neither the profile nor this bank, use the low-stakes rules
 above and stop only when the missing answer is materially significant.
 """.strip() + "\n" + UPLOAD_RULE + "\n" + BATCH_RULE + "\n" + FILLED_RULE + "\n" + REJECTION_RULE
-
-
-FORM_SYSTEM_PROMPT = """You are the answering component of a job-application assistant.
-
-You are given a form as a list of questions, the candidate profile, and a bank of answers the
-candidate has already approved. Return the actions that should be taken on this form.
-
-Each question carries: id (the control to act on), question, field_type, required, group, and
-options for a dropdown.
-
-Rules:
-- Answer only from the candidate profile or the approved answers. A missing fact is unknown: never
-  invent one, and never turn it into a negative answer.
-- For a text question, either copy the answer as a literal value, or name a profile fact with
-  value_ref using its dotted path (for example identity.first_name). value_ref works only for the
-  candidate profile: there is no reference form for user_provided_answers, so an answer from that
-  bank must be sent as a literal value. Prefer a literal when the field constrains its format - a
-  phone number, a date, an amount - because a profile path reproduces the profile's own formatting
-  and cannot be reformatted for the field.
-- Copy a literal value exactly as it appears in the profile or the approved answers. Do not reword,
-  round, reformat or shorten it.
-- For a select, radio or checkbox question, option_value must be copied exactly from that question's
-  options. Match on meaning: "Computer Science" should pick "Computer and Information Science" if
-  that is the closest option offered.
-- Group names identify repeated blocks. "From" in group "Work experience #2" is the second role's
-  start date, not the first.
-- snapshot_id: copy it exactly from the input. It identifies the page you are answering, and an
-  answer carrying any other value is discarded by the validator.
-- Answer as many questions as you can in one batch, up to 12 actions. Stop the batch after a click,
-  an upload or a scroll, because those change the page.
-- Skip anything that is not a question for the candidate: field_type button or unknown, navigation,
-  job-alert signup boxes, search boxes.
-%s
-%s
-%s
-%s
-- Never complete the application while a required question is unanswered. When a required question
-  cannot be grounded in the profile or the approved answers, return needs_input naming it.
-- Click a submit control only once every required question is answered.
-- Return complete only with visible evidence that the application was received.
-""" % (UPLOAD_RULE, BATCH_RULE, FILLED_RULE, REJECTION_RULE)
 
 
 def with_schema(system_prompt: str, mode: str) -> str:
@@ -247,15 +204,12 @@ def scrub_local_paths(value: Any, key: str | None = None) -> Any:
     return value
 
 
-def snapshot_for_llm(snapshot: PageSnapshot, include_all_options: bool = False) -> dict[str, Any]:
-    """The page as the model may see it.
+def snapshot_for_llm(snapshot: PageSnapshot) -> dict[str, Any]:
+    """The page as the model sees it.
 
-    A dropdown the planner must choose from needs its real options, because `option_value` has to be
-    copied exactly. One that is already set needs only enough context to confirm it, so it is
+    A dropdown the model must choose from needs its real options, because `option_value` has to be
+    copied exactly. One that already holds a value needs only enough context to confirm it, so it is
     windowed instead of sent whole - dropdowns dominate the payload otherwise.
-
-    `include_all_options` is the escape hatch: set it after a plan is rejected for choosing an option
-    that was not in the list we sent.
     """
     data = snapshot.model_dump(mode="json")
     for element in data["elements"]:
@@ -263,7 +217,7 @@ def snapshot_for_llm(snapshot: PageSnapshot, include_all_options: bool = False) 
         current = element.get("value")
         if not options:
             continue
-        if include_all_options or not current:
+        if not current:
             if len(options) > MAX_OPTIONS_SENT:
                 selected = [option for option in options if option["value"] == current]
                 element["options"] = selected + options[:500] + options[-499:]

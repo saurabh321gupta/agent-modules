@@ -173,14 +173,6 @@ def test_tracing_is_off_unless_asked_for():
     assert cli.config_from_args(parse(*BASE)).trace_path is None
 
 
-def test_normalisation_is_on_by_default():
-    assert cli.config_from_args(parse(*BASE)).normalise is True
-
-
-def test_normalisation_can_be_switched_off_from_the_command_line():
-    """Used to compare the two payloads on a live page."""
-    assert cli.config_from_args(parse(*BASE, "--no-normalise")).normalise is False
-    assert cli.config_from_args(parse(*BASE, "--normalise")).normalise is True
 
 
 def test_the_debugging_flags_are_documented_in_help():
@@ -202,14 +194,6 @@ def test_help_text_documents_the_staged_default():
 # ----------------------------------------------------------------------------------------- thinking
 
 
-def test_normaliser_thinking_is_off_by_default():
-    """It is most of a normalise call's latency and buys nothing for an extraction task."""
-    assert cli.config_from_args(parse(*BASE)).normaliser_thinking is False
-
-
-def test_normaliser_thinking_can_be_turned_on():
-    args = parse(*BASE, "--normaliser-thinking")
-    assert cli.config_from_args(args).normaliser_thinking is True
 
 
 def test_planner_thinking_is_unset_by_default():
@@ -224,7 +208,6 @@ def test_planner_thinking_can_be_set_either_way():
 
 def test_the_thinking_flags_are_documented():
     help_text = cli.build_parser().format_help()
-    assert "--normaliser-thinking" in help_text
     assert "--planner-thinking" in help_text
 
 

@@ -29,9 +29,9 @@ def resolve_profile_ref(profile: CandidateProfile, ref: str) -> Any:
     """Resolve a dotted profile path to a scalar. Unknown or empty values are an error, not None."""
     if ref.startswith("answers."):
         # The approved answer bank is a separate namespace that nothing resolves references against.
-        # Saying so beats reporting an unknown profile path: this message is fed back to the planner
-        # inside recent_history, so the model corrects itself next step instead of trying another
-        # profile path that cannot exist either.
+        # Saying so beats reporting an unknown profile path, which reads like a typo and invites
+        # another profile path that cannot exist either. The message reaches the human in the run's
+        # result, so it should name the fix rather than the symptom.
         raise PlanValidationError(
             "value_ref cannot name an approved answer: the answer bank is not referenceable, so "
             f"send that answer as a literal value instead of {ref!r}"
@@ -100,9 +100,12 @@ def validate_plan(
     assets: dict[str, str],
     allow_submission: bool,
 ) -> None:
-    """Raise `PlanValidationError` with a recoverable reason, or return cleanly."""
-    if plan.snapshot_id != snapshot.snapshot_id:
-        raise PlanValidationError("Plan was created for an expired snapshot")
+    """Raise `PlanValidationError` with a recoverable reason, or return cleanly.
+
+    There is no snapshot check. A plan is produced and executed against the same observation within
+    one step, so it cannot refer to an older page - and without an id to echo, the model has nothing
+    stale to send back.
+    """
     if len(plan.actions) > MAX_ACTIONS:
         raise PlanValidationError(f"Action batch exceeds the maximum of {MAX_ACTIONS} actions")
 

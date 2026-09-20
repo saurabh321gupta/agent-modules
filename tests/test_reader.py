@@ -100,7 +100,7 @@ async def test_aria_labelledby_is_resolved_by_the_accessibility_tree(loaded_page
 
 
 async def test_a_neighbouring_div_label_is_not_resolved(loaded_page):
-    """A known limitation, and the reason the normaliser exists.
+    """A known limitation of the accessible-name rules.
 
     The heuristic chain is aria-label -> label[for] -> wrapping label -> placeholder -> name ->
     innerText. A label sitting in a sibling div with no `for` is invisible to every one of those, so

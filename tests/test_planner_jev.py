@@ -372,11 +372,11 @@ async def test_the_jev_state_omits_options_and_file_inputs():
     assert "options" not in sent["current_page"]["elements"][0]
 
 
-async def test_history_is_trimmed_to_three_entries():
+async def test_the_state_carries_no_history():
+    """The whole transcript used to ride along here; now the state is just the facts and the page."""
     client, planner = make({"page_kind": choice("form")})
-    history = [{"snapshot_id": f"s{n}"} for n in range(10)]
-    await planner.next_step(APPLICANT, form_snapshot(element("e1", label="City")), history)
-    assert [h["snapshot_id"] for h in client.calls[0]["state"]["recent_history"]] == ["s7", "s8", "s9"]
+    await planner.next_step(APPLICANT, form_snapshot(element("e1", label="City")))
+    assert "recent_history" not in client.calls[0]["state"]
 
 
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path

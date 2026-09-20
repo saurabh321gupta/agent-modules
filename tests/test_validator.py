@@ -65,7 +65,7 @@ def test_an_answer_bank_reference_is_rejected_and_says_what_to_do(sample_profile
     """The answer bank is a separate namespace that nothing resolves references against.
 
     The message matters as much as the rejection: it is fed back to the planner inside
-    recent_history, so it has to point at the fix rather than read like a typo in a profile path.
+    run's result, so it has to point at the fix rather than read like a typo in a profile path.
     """
     with pytest.raises(PlanValidationError, match="answer bank is not referenceable"):
         resolve_profile_ref(sample_profile, "answers.Current notice period")
@@ -89,20 +89,16 @@ def test_an_answer_bank_reference_is_rejected_at_plan_validation(sample_profile)
 # ------------------------------------------------------------------------------- batch limits
 
 
-def test_expired_snapshot_is_rejected(sample_profile):
-    with pytest.raises(PlanValidationError, match="expired snapshot"):
-        validate_plan(plan("s-OLD", []), form_snapshot(), sample_profile, ASSETS, True)
-
 
 def test_batch_over_limit_is_rejected(sample_profile):
     actions = [action("scroll", "e3") for _ in range(13)]
     with pytest.raises(PlanValidationError, match="maximum of 12 actions"):
-        validate_plan(plan("s-1-abc12345", actions), form_snapshot(), sample_profile, ASSETS, True)
+        validate_plan(plan(actions), form_snapshot(), sample_profile, ASSETS, True)
 
 
 def test_twelve_actions_is_allowed(sample_profile):
     actions = [action("scroll", "e3") for _ in range(12)]
-    validate_plan(plan("s-1-abc12345", actions), form_snapshot(), sample_profile, ASSETS, True)
+    validate_plan(plan(actions), form_snapshot(), sample_profile, ASSETS, True)
 
 
 # ------------------------------------------------------------------------------- target rules
@@ -111,7 +107,7 @@ def test_twelve_actions_is_allowed(sample_profile):
 def test_unknown_target_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="not in snapshot"):
         validate_plan(
-            plan("s-1-abc12345", [action("fill", "e99", value="x")]),
+            plan([action("fill", "e99", value="x")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -122,7 +118,7 @@ def test_unknown_target_is_rejected(sample_profile):
 def test_missing_target_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="requires a target"):
         validate_plan(
-            plan("s-1-abc12345", [action("fill", None, value="x")]),
+            plan([action("fill", None, value="x")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -134,7 +130,7 @@ def test_disabled_target_is_rejected(sample_profile):
     """The message is parsed by the orchestrator to reduce the batch, so it must name the target."""
     with pytest.raises(PlanValidationError, match="Target e6 is disabled"):
         validate_plan(
-            plan("s-1-abc12345", [action("fill", "e6", value="x")]),
+            plan([action("fill", "e6", value="x")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -148,7 +144,7 @@ def test_disabled_target_is_rejected(sample_profile):
 def test_fill_on_file_input_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="is not a text field"):
         validate_plan(
-            plan("s-1-abc12345", [action("fill", "e4", value="/tmp/x.pdf")]),
+            plan([action("fill", "e4", value="/tmp/x.pdf")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -159,7 +155,7 @@ def test_fill_on_file_input_is_rejected(sample_profile):
 def test_fill_with_unknown_value_ref_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="Unknown candidate profile reference"):
         validate_plan(
-            plan("s-1-abc12345", [action("fill", "e1", value_ref="identity.nope")]),
+            plan([action("fill", "e1", value_ref="identity.nope")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -170,7 +166,7 @@ def test_fill_with_unknown_value_ref_is_rejected(sample_profile):
 def test_fill_with_neither_value_nor_ref_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="requires value or value_ref"):
         validate_plan(
-            plan("s-1-abc12345", [action("fill", "e1")]),
+            plan([action("fill", "e1")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -184,7 +180,7 @@ def test_fill_with_neither_value_nor_ref_is_rejected(sample_profile):
 def test_select_requires_an_option_value(sample_profile):
     with pytest.raises(PlanValidationError, match="requires option_value"):
         validate_plan(
-            plan("s-1-abc12345", [action("select", "e2")]),
+            plan([action("select", "e2")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -196,7 +192,7 @@ def test_select_with_absent_option_is_rejected(sample_profile):
     """A model that invents an option must not reach the page."""
     with pytest.raises(PlanValidationError, match="is unavailable for e2"):
         validate_plan(
-            plan("s-1-abc12345", [action("select", "e2", option_value="DEU")]),
+            plan([action("select", "e2", option_value="DEU")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -206,7 +202,7 @@ def test_select_with_absent_option_is_rejected(sample_profile):
 
 def test_select_with_real_option_is_allowed(sample_profile):
     validate_plan(
-        plan("s-1-abc12345", [action("select", "e2", option_value="IND")]),
+        plan([action("select", "e2", option_value="IND")]),
         form_snapshot(),
         sample_profile,
         ASSETS,
@@ -217,7 +213,7 @@ def test_select_with_real_option_is_allowed(sample_profile):
 def test_select_on_a_textbox_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="is not a dropdown"):
         validate_plan(
-            plan("s-1-abc12345", [action("select", "e1", option_value="x")]),
+            plan([action("select", "e1", option_value="x")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -231,7 +227,7 @@ def test_select_on_a_textbox_is_rejected(sample_profile):
 def test_set_checked_on_textbox_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="not a checkbox or radio"):
         validate_plan(
-            plan("s-1-abc12345", [action("set_checked", "e1", checked=True)]),
+            plan([action("set_checked", "e1", checked=True)]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -242,7 +238,7 @@ def test_set_checked_on_textbox_is_rejected(sample_profile):
 def test_set_checked_without_state_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="requires checked"):
         validate_plan(
-            plan("s-1-abc12345", [action("set_checked", "e5")]),
+            plan([action("set_checked", "e5")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -255,7 +251,7 @@ def test_set_checked_without_state_is_rejected(sample_profile):
 
 def test_upload_to_a_file_input_is_allowed(sample_profile):
     validate_plan(
-        plan("s-1-abc12345", [action("upload", "e4", asset_id="resume_primary")]),
+        plan([action("upload", "e4", asset_id="resume_primary")]),
         form_snapshot(),
         sample_profile,
         ASSETS,
@@ -268,11 +264,11 @@ def test_uploading_to_an_input_that_already_holds_a_file_is_rejected(sample_prof
 
     Re-uploading the same file changes nothing, and a batch ends at an upload, so everything after it
     is discarded - which left the same no-op plan repeating until no-progress gave up. The rejection
-    also reaches the planner in recent_history, so it can stop asking.
+    names the fix for whoever reads the run's result.
     """
     with pytest.raises(PlanValidationError, match="already holds a file"):
         validate_plan(
-            plan("s-1-abc12345", [action("upload", "e4", asset_id="resume_primary")]),
+            plan([action("upload", "e4", asset_id="resume_primary")]),
             form_snapshot(
                 elements=[
                     element("e4", role="textbox", label="", input_type="file",
@@ -287,7 +283,7 @@ def test_uploading_to_an_input_that_already_holds_a_file_is_rejected(sample_prof
 
 def test_an_empty_file_input_is_still_uploadable_in_the_same_batch_shape(sample_profile):
     validate_plan(
-        plan("s-1-abc12345", [action("upload", "e4", asset_id="resume_primary")]),
+        plan([action("upload", "e4", asset_id="resume_primary")]),
         form_snapshot(
             elements=[
                 element("e4", role="textbox", label="", input_type="file",
@@ -303,7 +299,7 @@ def test_an_empty_file_input_is_still_uploadable_in_the_same_batch_shape(sample_
 def test_upload_to_a_non_file_input_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="is not a file input"):
         validate_plan(
-            plan("s-1-abc12345", [action("upload", "e1", asset_id="resume_primary")]),
+            plan([action("upload", "e1", asset_id="resume_primary")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -314,7 +310,7 @@ def test_upload_to_a_non_file_input_is_rejected(sample_profile):
 def test_upload_of_unregistered_asset_is_rejected(sample_profile):
     with pytest.raises(PlanValidationError, match="Unregistered upload asset"):
         validate_plan(
-            plan("s-1-abc12345", [action("upload", "e4", asset_id="cover_letter")]),
+            plan([action("upload", "e4", asset_id="cover_letter")]),
             form_snapshot(),
             sample_profile,
             ASSETS,
@@ -326,7 +322,7 @@ def test_upload_of_asset_not_in_profile_is_rejected(sample_profile):
     """An asset the run registered but the profile never mentions is not the candidate's document."""
     with pytest.raises(PlanValidationError, match="not referenced by the candidate profile"):
         validate_plan(
-            plan("s-1-abc12345", [action("upload", "e4", asset_id="stray")]),
+            plan([action("upload", "e4", asset_id="stray")]),
             form_snapshot(),
             sample_profile,
             {"resume_primary": "/tmp/r.pdf", "stray": "/tmp/s.pdf"},
@@ -340,7 +336,7 @@ def test_upload_of_asset_not_in_profile_is_rejected(sample_profile):
 def test_submit_is_refused_when_submission_is_off(sample_profile):
     with pytest.raises(PlanValidationError, match="submission is disabled"):
         validate_plan(
-            plan("s-1-abc12345", [action("click", "e3")]),
+            plan([action("click", "e3")]),
             form_snapshot(elements=[element("e3", role="button", label="Submit Application")]),
             sample_profile,
             ASSETS,
@@ -351,7 +347,7 @@ def test_submit_is_refused_when_submission_is_off(sample_profile):
 def test_submit_is_refused_while_validation_errors_remain(sample_profile):
     with pytest.raises(PlanValidationError, match="validation errors remain"):
         validate_plan(
-            plan("s-1-abc12345", [action("click", "e3")]),
+            plan([action("click", "e3")]),
             form_snapshot(
                 elements=[element("e3", role="button", label="Submit")],
                 validation_errors=["Email is invalid"],
@@ -365,7 +361,7 @@ def test_submit_is_refused_while_validation_errors_remain(sample_profile):
 def test_submit_is_refused_while_a_required_field_is_unresolved(sample_profile):
     with pytest.raises(PlanValidationError, match="Required fields are unresolved: City"):
         validate_plan(
-            plan("s-1-abc12345", [action("click", "e3")]),
+            plan([action("click", "e3")]),
             form_snapshot(
                 elements=[
                     element("e1", role="textbox", label="City", required=True),
@@ -381,7 +377,7 @@ def test_submit_is_refused_while_a_required_field_is_unresolved(sample_profile):
 def test_submit_is_refused_while_a_required_file_is_unattached(sample_profile):
     with pytest.raises(PlanValidationError, match="Required fields are unresolved"):
         validate_plan(
-            plan("s-1-abc12345", [action("click", "e3")]),
+            plan([action("click", "e3")]),
             form_snapshot(
                 elements=[
                     element("e4", role="textbox", label="Resume", input_type="file",
@@ -397,7 +393,7 @@ def test_submit_is_refused_while_a_required_file_is_unattached(sample_profile):
 
 def test_submit_is_allowed_once_everything_is_resolved(sample_profile):
     validate_plan(
-        plan("s-1-abc12345", [action("click", "e3")]),
+        plan([action("click", "e3")]),
         form_snapshot(
             elements=[
                 element("e1", role="textbox", label="City", required=True, value="Bangalore"),
@@ -413,7 +409,7 @@ def test_submit_is_allowed_once_everything_is_resolved(sample_profile):
 def test_ordinary_next_button_is_never_gated(sample_profile):
     """Only a real submission control is gated; Next must stay clickable."""
     validate_plan(
-        plan("s-1-abc12345", [action("click", "e3")]),
+        plan([action("click", "e3")]),
         form_snapshot(),
         sample_profile,
         ASSETS,
@@ -451,7 +447,7 @@ def test_unresolved_required_names_fields_readably():
 
 def test_scroll_without_target_is_allowed(sample_profile):
     validate_plan(
-        plan("s-1-abc12345", [action("scroll", None)]), form_snapshot(), sample_profile, ASSETS, True
+        plan([action("scroll", None)]), form_snapshot(), sample_profile, ASSETS, True
     )
 
 

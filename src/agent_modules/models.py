@@ -97,11 +97,15 @@ class CompletionEvidence(BaseModel):
 
 
 class ApplicationPlan(BaseModel):
-    """A model's constrained intent for one page. Nothing here has run yet."""
+    """A model's constrained intent for one page. Nothing here has run yet.
+
+    No snapshot id. A plan is produced and executed against the same observation inside one step, so
+    there is no window in which it could go stale - and asking the model to echo an id back was a way
+    for a run to die on a copied string rather than on anything real.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    snapshot_id: str
     status: PlanStatus
     actions: list[Action]
     reason: str
@@ -128,29 +132,3 @@ class RunResult(BaseModel):
     journey_log: str | None = None
     journey_jsonl: str | None = None
     journey_timing: str | None = None
-
-
-class NormalisedField(BaseModel):
-    """One control after the normaliser has said what it is asking. Layer 0 so both the
-    normaliser and every planner share the same shape without importing each other."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    question: str
-    field_type: str
-    required: bool
-    group: str | None = None
-    options: list[Option] = Field(default_factory=list)
-    raw_label: str = ""
-    raw_input_type: str | None = None
-
-
-class NormalisedForm(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    page_kind: str
-    fields: list[NormalisedField]
-    submit_controls: list[str]
-    dropped_ids: list[str] = Field(default_factory=list)
-    cached: bool = False

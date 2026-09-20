@@ -11,8 +11,6 @@ from agent_modules.models import (
     ApplicationPlan,
     CandidateProfile,
     CompletionEvidence,
-    NormalisedField,
-    NormalisedForm,
     PageElement,
     RunResult,
 )
@@ -67,7 +65,6 @@ def test_all_action_fields_are_required_for_strict_schema():
 
 def test_plan_round_trips_through_json():
     original = ApplicationPlan(
-        snapshot_id="s-1-a",
         status="continue",
         actions=[action("fill", "e1", value_ref="identity.first_name")],
         reason="fill the name",
@@ -80,8 +77,7 @@ def test_plan_round_trips_through_json():
 def test_plan_status_is_constrained():
     with pytest.raises(ValidationError):
         ApplicationPlan(
-            snapshot_id="s-1-a",
-            status="nonsense",
+                status="nonsense",
             actions=[],
             reason="",
             completion_evidence=None,
@@ -113,13 +109,6 @@ def test_completion_evidence_is_all_nullable():
     evidence = CompletionEvidence(text=None, url=None, reference=None)
     assert evidence.reference is None
 
-
-def test_normalised_form_defaults_are_independent():
-    """A mutable default shared between instances would leak cache state across forms."""
-    first = NormalisedForm(page_kind="form", fields=[], submit_controls=[])
-    second = NormalisedForm(page_kind="form", fields=[], submit_controls=[])
-    first.fields.append(NormalisedField(id="e1", question="City", field_type="text", required=True))
-    assert second.fields == []
 
 
 def test_snapshot_serialises_for_the_journey_trace():

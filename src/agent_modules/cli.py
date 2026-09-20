@@ -33,21 +33,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", required=True, help="Candidate profile JSON file")
     parser.add_argument("--asset", action="append", type=parse_asset, default=[], help="Registered upload: asset_id=/absolute/path")
     parser.add_argument("--defaults", help="JSON file of pre-approved question/answer pairs sent to the planner alongside the profile")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model for the planner and the normaliser")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model for the planner")
     parser.add_argument(
         "--planner",
         choices=["llm", "jev", "staged"],
         default="staged",
         help=(
-            "'staged' classifies the page with Jev then normalises and answers only form pages "
-            "(default); 'llm' is the single generative planner; 'jev' is the Jev per-field planner"
+            "'staged' classifies the page with Jev, then answers a form page with the model (default); "
+            "'llm' skips classification and always answers; 'jev' is the Jev per-field planner"
         ),
-    )
-    parser.add_argument(
-        "--normalise",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Send form pages to the planner as normalised questions, one model call per form shape (default). --no-normalise sends the raw snapshot instead, which carries the site's own validation errors inline, and is useful for comparing the two",
     )
     parser.add_argument("--jev-api-key-file", help="Jev API key file, required by the staged and jev planners")
     parser.add_argument("--jev-model", default=DEFAULT_JEV_MODEL)
@@ -67,12 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["default", "low", "medium", "high"],
         default="low",
         help="Planner reasoning effort; 'default' leaves it to the provider (default: low, substantially faster)",
-    )
-    parser.add_argument(
-        "--normaliser-thinking",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Leave the provider's reasoning on while normalising a form. Off by default: describing a field is extraction, not deduction, and reasoning there is most of a normalise call's latency",
     )
     parser.add_argument(
         "--planner-thinking",
@@ -100,7 +88,6 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         answers=load_answer_bank(args.defaults) if args.defaults else {},
         answers_path=args.defaults,
         planner=args.planner,
-        normalise=args.normalise,
         jev_api_key=read_api_key(args.jev_api_key_file) if args.jev_api_key_file else None,
         jev_model=args.jev_model,
         jev_confidence_floor=args.jev_confidence,
@@ -111,7 +98,6 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         hedge_after_s=args.hedge_after,
         trace_path=args.trace,
         reasoning_effort=None if args.effort == "default" else args.effort,
-        normaliser_thinking=args.normaliser_thinking,
         planner_thinking=args.planner_thinking,
     )
 

@@ -1,8 +1,12 @@
 """The single generative planner. Layer 4.
 
-One call per page plan: profile, approved answers, the current page, and the recent history go in;
-one constrained `ApplicationPlan` comes out. The staged planner uses the same answering prompt for
-form pages, so the prompt lives in `prompts_llm` rather than here.
+One call per page: the profile, the approved answers, the page, and the prompt. That is the whole
+payload. Everything that used to ride along - a normalised form, a recent history, an id the model
+had to echo back - is gone, because each of those turned into a way for a run to fail rather than a
+way for it to succeed.
+
+The planner is deliberately dumb. It sees what a person would see on the page and answers from facts
+it is allowed to use; it is not asked to remember anything between steps.
 """
 
 from __future__ import annotations
@@ -15,8 +19,8 @@ from pydantic import ValidationError
 from .config import AutomationDefaults
 from .journey import JourneyLogger
 from .llm_client import ModelClient
+from .models import ApplicationPlan, CandidateProfile, PageSnapshot
 from .prompts_llm import MAIN_SYSTEM_PROMPT, profile_for_llm, snapshot_for_llm, with_schema
-from .models import ApplicationPlan, CandidateProfile, NormalisedForm, PageSnapshot
 
 
 class LLMPlanner:
@@ -42,73 +46,23 @@ class LLMPlanner:
         #: - matching a fact to a question, choosing between similar options - so this is left alone
         #: unless a caller has measured that turning it off holds up.
         self.thinking = thinking
-        #: Escape hatch: set after a plan is rejected for choosing an option we did not send.
-        self.include_all_options = False
         #: Reported by the orchestrator in STEP TIMING.
         self.last_step: dict[str, Any] = {}
 
-    def payload(
-        self,
-        profile: CandidateProfile,
-        snapshot: PageSnapshot,
-        history: list[dict[str, Any]],
-        form: NormalisedForm | None = None,
-    ) -> dict[str, Any]:
-        """The user message.
-
-        With a normalised form the page is sent as questions rather than as raw controls, which is
-        both smaller and easier to answer. Without one, the snapshot goes as it is.
-        """
-        base: dict[str, Any] = {
+    def payload(self, profile: CandidateProfile, snapshot: PageSnapshot) -> dict[str, Any]:
+        """The user message: who the candidate is, what they have approved, and the page itself."""
+        return {
             "candidate_profile": profile_for_llm(profile, self.assets, self.defaults),
             "user_provided_answers": self.answer_bank,
-            "recent_history": history[-6:],
+            "current_page": snapshot_for_llm(snapshot),
         }
-        if form is None:
-            base["current_page"] = snapshot_for_llm(snapshot, self.include_all_options)
-            return base
-        # The normalised form is cached by *shape*, so its questions are reusable but its state is
-        # not. Anything that changes between steps - the value in a field, whether the site has
-        # rejected it, the page's own validation messages - has to be read from the live snapshot.
-        # Taking them from the cached form instead is how a rejected phone number was re-sent
-        # unchanged, step after step, while the page refused to advance.
-        live = {element.id: element for element in snapshot.elements}
-        base["snapshot_id"] = snapshot.snapshot_id
-        base["validation_errors"] = snapshot.validation_errors
-        base["form"] = {
-            "page_kind": form.page_kind,
-            "questions": [
-                {
-                    "id": field.id,
-                    "question": field.question,
-                    "field_type": field.field_type,
-                    "required": field.required,
-                    "group": field.group,
-                    # Complete, from the page: a dropdown's option_value is often a code that only
-                    # the page knows.
-                    "options": [{"value": o.value, "label": o.label} for o in field.options],
-                    "current_value": live[field.id].value if field.id in live else None,
-                    # Whether a checkbox or radio is already set. `value` on those is the HTML value
-                    # attribute, not the state, so without this the model cannot tell a ticked box
-                    # from an empty one and has to guess whether to touch it.
-                    "checked": live[field.id].checked if field.id in live else None,
-                    # True when the site has flagged this control as holding a bad value.
-                    "rejected": live[field.id].invalid if field.id in live else False,
-                }
-                for field in form.fields
-            ],
-            "submit_controls": form.submit_controls,
-        }
-        return base
 
     async def next_step(
         self,
         profile: CandidateProfile,
         snapshot: PageSnapshot,
-        history: list[dict[str, Any]],
-        form: NormalisedForm | None = None,
     ) -> ApplicationPlan:
-        payload = self.payload(profile, snapshot, history, form)
+        payload = self.payload(profile, snapshot)
         self.last_step = {"class": "page", "confidence": 0.0, "actions": 0}
 
         attempts_left = 2

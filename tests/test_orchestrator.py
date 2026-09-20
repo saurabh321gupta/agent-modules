@@ -67,7 +67,7 @@ def make_run(plans, *, snapshots=None, config=None, raises=None, tmp_path=None):
 
 
 async def test_a_bad_url_is_refused_before_anything_else(tmp_path):
-    run, _, _, logger = make_run([plan("s-1-abc12345")], tmp_path=tmp_path)
+    run, _, _, logger = make_run([plan()], tmp_path=tmp_path)
     run.url = "ftp://example.com"
     result = await run.execute()
     assert result.status == "failed"
@@ -77,7 +77,7 @@ async def test_a_bad_url_is_refused_before_anything_else(tmp_path):
 
 async def test_the_staged_planner_requires_a_jev_key(tmp_path):
     run, _, _, logger = make_run(
-        [plan("s-1-abc12345")], config=RunConfig(planner="staged", api_key="k"), tmp_path=tmp_path
+        [plan()], config=RunConfig(planner="staged", api_key="k"), tmp_path=tmp_path
     )
     result = await run.execute()
     assert result.status == "failed"
@@ -87,7 +87,7 @@ async def test_the_staged_planner_requires_a_jev_key(tmp_path):
 
 async def test_the_llm_planner_requires_an_llm_key(tmp_path):
     run, _, _, logger = make_run(
-        [plan("s-1-abc12345")], config=RunConfig(planner="llm", api_key=None), tmp_path=tmp_path
+        [plan()], config=RunConfig(planner="llm", api_key=None), tmp_path=tmp_path
     )
     run.config.api_key = None
     result = await run.execute()
@@ -102,8 +102,8 @@ async def test_the_llm_planner_requires_an_llm_key(tmp_path):
 async def test_a_completion_verdict_ends_the_run_successfully(tmp_path):
     """The verifier owns success: a page that says it was received, and nothing else."""
     snap = snapshot(EL, visible_text=["Thank you for applying"])
-    run, _, _, logger = make_run([plan("s-1-abc12345")], snapshots=[snap], tmp_path=tmp_path)
-    result = await run.loop(FakePage(), ScriptedPlanner([plan("s-1-abc12345")]))
+    run, _, _, logger = make_run([plan()], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), ScriptedPlanner([plan()]))
     assert result.status == "success"
     assert result.evidence is not None
     logger.close()
@@ -112,8 +112,8 @@ async def test_a_completion_verdict_ends_the_run_successfully(tmp_path):
 async def test_a_blocker_ends_the_run_as_blocked(tmp_path):
     """Blockers are computed by the reader from the page text, so they arrive on the snapshot."""
     snap = snapshot(EL, blockers=["CAPTCHA or human verification is present"])
-    run, _, _, logger = make_run([plan("s-1-abc12345")], snapshots=[snap], tmp_path=tmp_path)
-    result = await run.loop(FakePage(), ScriptedPlanner([plan("s-1-abc12345")]))
+    run, _, _, logger = make_run([plan()], snapshots=[snap], tmp_path=tmp_path)
+    result = await run.loop(FakePage(), ScriptedPlanner([plan()]))
     assert result.status == "blocked"
     assert "CAPTCHA" in result.message
     logger.close()
@@ -123,7 +123,7 @@ async def test_a_page_that_does_not_move_is_abandoned(tmp_path):
     """Three identical snapshots means it is not going to advance, and each retry costs a call."""
     snap = snapshot(EL)
     run, planner, _, logger = make_run(
-        [plan("s-1-abc12345")], snapshots=[snap], tmp_path=tmp_path
+        [plan()], snapshots=[snap], tmp_path=tmp_path
     )
     result = await run.loop(FakePage(), planner)
     assert result.status == "blocked"
@@ -134,7 +134,7 @@ async def test_a_page_that_does_not_move_is_abandoned(tmp_path):
 
 async def test_needs_input_is_passed_through_with_its_reason(tmp_path):
     snap = snapshot(EL)
-    pending = plan("s-1-abc12345", [], status="needs_input", reason="Current salary is unknown")
+    pending = plan([], status="needs_input", reason="Current salary is unknown")
     run, _, _, logger = make_run([pending], snapshots=[snap], tmp_path=tmp_path)
     result = await run.loop(FakePage(), ScriptedPlanner([pending]))
     assert result.status == "needs_input"
@@ -145,7 +145,7 @@ async def test_needs_input_is_passed_through_with_its_reason(tmp_path):
 async def test_a_complete_verdict_without_visible_evidence_does_not_end_the_run(tmp_path):
     """Only the verifier may declare success, so a 'complete' plan is re-observed."""
     snap = snapshot(EL)
-    claimed = plan("s-1-abc12345", [], status="complete", reason="done")
+    claimed = plan([], status="complete", reason="done")
     run, planner, _, logger = make_run([claimed], snapshots=[snap], tmp_path=tmp_path)
     result = await run.loop(FakePage(), planner)
     assert result.status == "blocked", "the run kept going and then hit no-progress"
@@ -177,7 +177,7 @@ async def test_the_step_limit_is_reported(tmp_path):
 
 async def test_an_exhausted_budget_discards_the_run_without_submitting(tmp_path):
     run, plan_r, _, logger = make_run(
-        [plan("s-1-abc12345")],
+        [plan()],
         snapshots=[snapshot(EL)],
         config=RunConfig(planner="llm", max_run_seconds=0.0),
         tmp_path=tmp_path,
@@ -190,7 +190,7 @@ async def test_an_exhausted_budget_discards_the_run_without_submitting(tmp_path)
 
 async def test_the_budget_is_reported_in_the_readable_log(tmp_path):
     run, plan_r, _, logger = make_run(
-        [plan("s-1-abc12345")],
+        [plan()],
         snapshots=[snapshot(EL)],
         config=RunConfig(planner="llm", max_run_seconds=0.0),
         tmp_path=tmp_path,
@@ -377,7 +377,7 @@ async def test_a_recoverable_rejection_is_retried_then_becomes_blocked(tmp_path)
 
 async def test_an_unrecoverable_rejection_stops_immediately(tmp_path):
     snap = snapshot(EL)
-    stale = plan("s-OLD", [])
+    stale = plan([])
     run, planner, _, logger = make_run([stale], snapshots=[snap], tmp_path=tmp_path)
     result = await run.loop(FakePage(), planner)
     assert result.status == "blocked"
@@ -477,7 +477,7 @@ async def test_a_page_that_never_paints_is_blocked(tmp_path):
 async def test_a_navigation_failure_is_reported_clearly(tmp_path):
     run, _, page, logger = make_run([], snapshots=[snapshot(EL)], tmp_path=tmp_path)
     page.goto_error = RuntimeError("net::ERR_NAME_NOT_RESOLVED")
-    result = await run.loop(page, ScriptedPlanner([plan("s-1-abc12345")]))
+    result = await run.loop(page, ScriptedPlanner([plan()]))
     assert result.status == "failed"
     assert "Could not open application URL" in result.message
     logger.close()
@@ -501,7 +501,7 @@ async def test_a_run_that_cannot_start_still_points_at_its_trace(tmp_path):
 
 async def test_the_run_finished_event_is_always_written(tmp_path):
     run, planner, _, logger = make_run(
-        [plan("s-1-abc12345")],
+        [plan()],
         snapshots=[snapshot(EL, visible_text=["Thank you for applying"])],
         tmp_path=tmp_path,
     )

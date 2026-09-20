@@ -26,12 +26,10 @@ from .config import HEADLESS_VIEWPORT, MIN_AUTO_ZOOM, RunConfig
 from .executor import BrowserExecutor
 from .journey import JourneyLogger
 from .llm_client import ModelTimeoutError
-from .normalizer import Normalizer
 from .planner_jev import JevPlanner, LlmFieldAssist
 from .planner_llm import LLMPlanner
 from .planner_staged import StagedPlanner
 from .policy import default_consent_actions
-from .prompts_llm import FORM_SYSTEM_PROMPT
 from .reader import PageReader, snapshot_fingerprint
 from .models import ActionResult, ApplicationPlan, CandidateProfile, PageSnapshot, RunResult
 from .validator import PlanValidationError, resolve_profile_ref, validate_plan
@@ -80,12 +78,6 @@ def build_planner(
         budgeted.append(classifier)
         planner = StagedPlanner(
             classifier,
-            Normalizer(
-                llm_client,
-                config.model,
-                journey=journey,
-                thinking=config.normaliser_thinking,
-            ),
             LLMPlanner(
                 llm_client,
                 config.model,
@@ -93,11 +85,9 @@ def build_planner(
                 config.defaults,
                 config.answers,
                 journey=journey,
-                system_prompt=FORM_SYSTEM_PROMPT,
                 thinking=config.planner_thinking,
             ),
             assets,
-            normalise=config.normalise,
             journey=journey,
         )
     elif config.planner == "jev":
@@ -156,12 +146,10 @@ async def run_application(
         answers=len(config.answers),
         answers_path=config.answers_path,
         field_pause_s=config.field_pause_s,
-        normalise=config.normalise,
         reasoning_effort=config.reasoning_effort,
         request_timeout_s=config.request_timeout_s,
         hedge_after_s=config.hedge_after_s,
         max_run_seconds=config.max_run_seconds,
-        normaliser_thinking=config.normaliser_thinking,
         planner_thinking=config.planner_thinking,
         trace_path=config.trace_path,
         defaults=config.defaults,
@@ -206,7 +194,6 @@ class _ApplicationRun:
         self.config = config
         self.journey = journey
         self.reader = PageReader()
-        self.history: list[dict[str, Any]] = []
         self.fingerprints: Counter[str] = Counter()
         self.stale_plans: Counter[str] = Counter()
         self.results: list[ActionResult] = []
@@ -484,7 +471,7 @@ class _ApplicationRun:
                 execute_started = time.perf_counter()
                 results = await executor.execute(consent_actions, snapshot, self.profile)
                 timings["execute_ms"] = (time.perf_counter() - execute_started) * 1_000
-                self.record(snapshot, consent_actions, results, reason="applied_user_consent_default")
+                self.record(results)
                 return None
 
             return await self.plan_and_act(page, planner, executor, snapshot, step, timings)
@@ -599,7 +586,7 @@ class _ApplicationRun:
         plan: ApplicationPlan | None = None
         try:
             plan_started = time.perf_counter()
-            plan = await planner.next_step(self.profile, snapshot, self.history)
+            plan = await planner.next_step(self.profile, snapshot)
             timings["plan_ms"] = (time.perf_counter() - plan_started) * 1_000
             self.journey.log("plan_received", step=step, plan=plan)
             validate_started = time.perf_counter()
@@ -624,14 +611,8 @@ class _ApplicationRun:
             )
 
         if plan.status == "complete":
-            # Only visible confirmation proves success, and the verifier already looked.
-            self.history.append(
-                {
-                    "snapshot_id": snapshot.snapshot_id,
-                    "event": "completion_not_verified",
-                    "reason": plan.reason,
-                }
-            )
+            # Only visible confirmation proves success, and the verifier already looked, so this is
+            # not a completion. Re-observe and see whether the page agrees.
             return None
 
         if plan.status == "needs_input" and self.actions_already_satisfied(plan, snapshot):
@@ -675,26 +656,12 @@ class _ApplicationRun:
         results = await executor.execute(plan.actions, snapshot, self.profile)
         timings["execute_ms"] = (time.perf_counter() - execute_started) * 1_000
         self.transient_rejections = 0
-        self.record(snapshot, plan.actions, results)
+        self.record(results)
         return None
 
-    def record(
-        self,
-        snapshot: PageSnapshot,
-        actions: list[Any],
-        results: list[ActionResult],
-        *,
-        reason: str | None = None,
-    ) -> None:
+    def record(self, results: list[ActionResult]) -> None:
+        """Keep every result for the run's own report. Nothing is fed back to the planner."""
         self.results.extend(results)
-        entry: dict[str, Any] = {
-            "snapshot_id": snapshot.snapshot_id,
-            "actions": [action.model_dump(mode="json") for action in actions],
-            "results": [result.model_dump(mode="json") for result in results],
-        }
-        if reason:
-            entry["event"] = reason
-        self.history.append(entry)
 
     # -------------------------------------------------------------------------------- recovery
 
@@ -729,7 +696,7 @@ class _ApplicationRun:
                 execute_started = time.perf_counter()
                 results = await executor.execute(reduced.actions, snapshot, self.profile)
                 timings["execute_ms"] = (time.perf_counter() - execute_started) * 1_000
-                self.record(snapshot, reduced.actions, results)
+                self.record(results)
                 self.transient_rejections = 0
                 return None
 
@@ -747,12 +714,9 @@ class _ApplicationRun:
                 reason=(
                     "The disabled control became actionable again; re-planning against the live page."
                     if waited
-                    else "Re-observing and re-planning with the rejection in history: the control "
-                    "may be briefly disabled, or the chosen option may not exist in that dropdown."
+                    else "Re-observing and re-planning: the control may be briefly disabled, or the "
+                    "chosen option may not exist in that dropdown."
                 ),
-            )
-            self.history.append(
-                {"snapshot_id": snapshot.snapshot_id, "event": "plan_rejected", "reason": message}
             )
             return None
 
@@ -781,14 +745,6 @@ class _ApplicationRun:
             plan=plan,
             reason=message,
             stale_count=self.stale_plans[fingerprint],
-        )
-        self.history.append(
-            {
-                "snapshot_id": snapshot.snapshot_id,
-                "event": "stale_plan_ignored",
-                "reason": message,
-                "actions": [action.model_dump(mode="json") for action in plan.actions],
-            }
         )
         # This was a recoverable planner contradiction, not genuine page stagnation.
         self.fingerprints[fingerprint] = 0

@@ -35,7 +35,6 @@ LAYERS: dict[str, int] = {
     "llm_client": 3,
     "jev_client": 3,
     # L4 - planners
-    "normalizer": 4,
     "planner_llm": 4,
     "planner_jev": 4,
     "planner_staged": 4,

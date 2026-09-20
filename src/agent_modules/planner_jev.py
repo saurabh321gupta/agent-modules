@@ -191,7 +191,6 @@ class JevPlanner:
         self,
         profile: CandidateProfile,
         snapshot: PageSnapshot,
-        history: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Build the Jev state leanly: Jev has a far smaller input budget than a language model.
 
@@ -224,17 +223,15 @@ class JevPlanner:
                 "validation_errors": snapshot.validation_errors,
                 "blockers": snapshot.blockers,
             },
-            "recent_history": history[-3:],
         }
 
     async def next_step(
         self,
         profile: CandidateProfile,
         snapshot: PageSnapshot,
-        history: list[dict[str, Any]],
     ) -> ApplicationPlan:
         started = time.perf_counter()
-        state = self.state(profile, snapshot, history)
+        state = self.state(profile, snapshot)
         questions, element_by_question, large_dropdowns, invalid_elements = build_field_questions(
             profile, snapshot, self.answer_bank
         )
@@ -529,7 +526,6 @@ class JevPlanner:
             )
         )
         return ApplicationPlan(
-            snapshot_id=snapshot.snapshot_id,
             status="continue",
             actions=actions,
             reason=reason,
@@ -575,7 +571,6 @@ class JevPlanner:
         if notes:
             reason = reason + " | " + "; ".join(notes)
         return ApplicationPlan(
-            snapshot_id=snapshot.snapshot_id,
             status=status,  # type: ignore[arg-type]
             actions=[],
             reason=reason,

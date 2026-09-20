@@ -111,9 +111,8 @@ def action(kind: str, target: str | None = None, **extra: Any) -> Action:
     return Action(type=kind, target=target, **fields)
 
 
-def plan(snapshot_id: str, actions: list[Action] | None = None, **overrides: Any) -> ApplicationPlan:
+def plan(actions: list[Action] | None = None, **overrides: Any) -> ApplicationPlan:
     data: dict[str, Any] = {
-        "snapshot_id": snapshot_id,
         "status": "continue",
         "actions": actions or [],
         "reason": "test plan",

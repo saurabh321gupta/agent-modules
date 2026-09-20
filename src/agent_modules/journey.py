@@ -109,8 +109,6 @@ class JourneyRenderer:
             return self._step_timing(data)
         if event == "page_classified":
             return self._page_classified(data)
-        if event == "normalised_form":
-            return self._normalised_form(data)
         if event == "overlay_cleanup":
             return self._overlay_cleanup(data)
         if event == "jev_response":
@@ -177,17 +175,6 @@ class JourneyRenderer:
                 f"Verdict confidence: {data.get('confidence')}",
                 f"Submitted evidence: {data.get('submitted_evidence')}",
                 str(data.get("note", "")),
-            ]
-        if event == "normalise_request":
-            return ["Normaliser request (exact payload):"] + self._indented(data.get("request"), 2)
-        if event == "normalise_response":
-            return [
-                f"Model             : {data.get('model', '')}",
-                f"Latency           : {data.get('latency_s', '')}s",
-                f"Tokens            : prompt={data.get('prompt_tokens')} "
-                f"completion={data.get('completion_tokens')} cached={data.get('cached_tokens')}",
-                "Raw response (verbatim):",
-                str(data.get("raw_response", "")),
             ]
         if event == "schema_fallback":
             return [
@@ -277,12 +264,7 @@ class JourneyRenderer:
             f"Answer bank       : {data.get('answers', 0)} answers ({data.get('answers_path') or 'none'})",
             # Without this, a run's artefacts cannot confirm whether the pause was applied at all.
             f"Field pause       : {data.get('field_pause_s', 0.0)}s after typing",
-            f"Form payload      : "
-            f"{'normalised questions' if data.get('normalise', True) else 'raw snapshot (normalisation off)'}",
-            f"Reasoning effort  : {data.get('reasoning_effort') or 'provider default'}",
-            f"Thinking          : normaliser "
-            f"{'on' if data.get('normaliser_thinking', False) else 'off'}, "
-            f"planner "
+            f"Thinking          : "
             + (
                 "on"
                 if data.get("planner_thinking") is True
@@ -333,7 +315,6 @@ class JourneyRenderer:
         lines = [
             f"Application step  : {data.get('step')}",
             f"Plan status       : {plan.get('status', '')}",
-            f"Snapshot used     : {plan.get('snapshot_id', '')}",
             f"Reason            : {plan.get('reason', '')}",
             "Planned actions:",
         ]
@@ -428,24 +409,6 @@ class JourneyRenderer:
             f"Usage             : {data.get('usage')}",
         ]
 
-    def _normalised_form(self, data: dict[str, Any]) -> list[str]:
-        if data.get("cached"):
-            lines = [f"Normalised form   : reused from cache ({data.get('field_count', '')} fields)"]
-        else:
-            lines = [
-                f"Page kind         : {data.get('page_kind', '')}",
-                f"Fields            : {data.get('field_count', '')}",
-                f"Invented ids      : {data.get('dropped_ids') or 'none'}",
-            ]
-        lines.append(f"{'id':<6}{'type':<13}{'req':<5}{'group':<26}question")
-        for field in data.get("form") or []:
-            lines.append(
-                f"{field.get('id', ''):<6}{str(field.get('field_type', '')):<13}"
-                f"{('yes' if field.get('required') else 'no'):<5}"
-                f"{('[' + str(field['group']) + ']') if field.get('group') else '':<26}"
-                f"{str(field.get('question', ''))[:78]}"
-            )
-        return lines
 
     def _overlay_cleanup(self, data: dict[str, Any]) -> list[str]:
         lines = ["Automatically closed non-essential UI overlays before observing the page:"]

@@ -143,12 +143,11 @@ def test_a_long_url_is_truncated_so_the_table_stays_a_table():
 def test_model_time_sums_the_reported_latencies():
     output = run_with(
         record("llm_response", 0.0, latency_s=10.0, prompt_tokens=1, completion_tokens=1),
-        record("normalise_response", 11.0, latency_s=5.0, prompt_tokens=1, completion_tokens=1),
         record("jev_response", 17.0, latency_s=1.0),
         record("run_finished", 20.0, result={"status": "success"}),
     )
-    assert "model          16.00s" in output
-    assert "3 call(s)" in output
+    assert "model          11.00s" in output
+    assert "2 call(s)" in output
 
 
 def test_browser_time_is_measured_from_action_start_to_result():

@@ -79,7 +79,6 @@ def test_usage_accumulates_across_llm_responses(tmp_path):
 def test_usage_ignores_non_numeric_and_other_events(tmp_path):
     logger = JourneyLogger(str(tmp_path / "j.jsonl"))
     logger.log("llm_response", prompt_tokens="nonsense")
-    logger.log("normalise_response", prompt_tokens=999)
     logger.close()
     assert logger._usage["prompt_tokens"] == 0
 
@@ -202,16 +201,6 @@ def test_run_started_reports_whether_a_trace_is_being_recorded(tmp_path):
     assert "Playwright trace  : off" in human
 
 
-def test_run_started_reports_which_form_payload_is_in_use(tmp_path):
-    """The two payloads behave differently, so the trace has to say which one ran."""
-    logger = JourneyLogger(str(tmp_path / "j.jsonl"))
-    logger.log("run_started", url="u", normalise=True)
-    logger.log("run_started", url="u", normalise=False)
-    logger.close()
-    human = (tmp_path / "j.log").read_text(encoding="utf-8")
-    assert "Form payload      : normalised questions" in human
-    assert "Form payload      : raw snapshot (normalisation off)" in human
-
 
 def test_trace_events_have_readable_sections(tmp_path):
     logger = JourneyLogger(str(tmp_path / "j.jsonl"))
@@ -325,16 +314,15 @@ def test_renderer_can_be_used_without_a_logger():
     assert "expired" in output
 
 
-def test_run_started_reports_the_thinking_settings(tmp_path):
+def test_run_started_reports_the_thinking_setting(tmp_path):
     """Whether reasoning was on changes both the latency and the quality, so the trace must say."""
     logger = JourneyLogger(str(tmp_path / "j.jsonl"))
-    logger.log("run_started", url="u", normaliser_thinking=False, planner_thinking=None)
-    logger.log("run_started", url="u", normaliser_thinking=True, planner_thinking=False)
+    logger.log("run_started", url="u", planner_thinking=None)
+    logger.log("run_started", url="u", planner_thinking=False)
     logger.close()
     human = (tmp_path / "j.log").read_text(encoding="utf-8")
-    assert "Thinking          : normaliser off, planner provider default" in human
-    assert "Thinking          : normaliser on, planner off" in human
-
+    assert "Thinking          : provider default" in human
+    assert "Thinking          : off" in human
 
 if __name__ == "__main__":  # pragma: no cover - a convenience, not a test path
     import pytest

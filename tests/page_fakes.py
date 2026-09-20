@@ -210,7 +210,7 @@ class ScriptedPlanner:
         self.calls = 0
         self.last_step: dict[str, Any] = {}
 
-    async def next_step(self, profile: Any, snapshot: Any, history: list[Any]) -> Any:
+    async def next_step(self, profile: Any, snapshot: Any) -> Any:
         self.calls += 1
         if self.raises:
             raise self.raises.pop(0)
